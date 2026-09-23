@@ -9,7 +9,7 @@ from tkinter import ttk, filedialog, messagebox
 from openpyxl import load_workbook
 
 APP_NAME = "DUR Dashboard"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 CATEGORIES = [
     ("combo_paid", "병용금기 급여"),
@@ -27,9 +27,10 @@ DUR_CARDS = [
     ("tele", "비대면진료 금지"), ("cost", "비용효과적 함량"),
 ]
 
-BG="#F5F7FB"; PANEL="#FFFFFF"; TEXT="#172033"; MUTED="#6B7280"; BORDER="#E5E7EB"
-ACCENT="#4F46E5"; ACCENT_SOFT="#EEF2FF"; YES="#0F766E"; YES_BG="#ECFDF5"
-NO="#64748B"; NO_BG="#F8FAFC"; WARN="#B45309"; WARN_BG="#FFF7ED"; ERROR="#B91C1C"
+BG="#F6F3ED"; PANEL="#FFFFFF"; TEXT="#30352F"; MUTED="#74786F"; BORDER="#E4E0D8"
+SAGE="#7C9278"; DEEP_SAGE="#526653"; SAGE_SOFT="#EEF3EC"
+TERRA="#C9785D"; TERRA_SOFT="#F7E8E1"; NO="#777B74"; NO_BG="#F6F6F3"
+WARN="#A86635"; WARN_BG="#FFF4E8"; ERROR="#A84F46"
 
 
 def app_dir() -> Path:
@@ -204,27 +205,34 @@ class Indexer:
 
 class App(tk.Tk):
     def __init__(self):
-        super().__init__(); self.title(f"{APP_NAME}  {VERSION}"); self.geometry("1480x900"); self.minsize(1180,760); self.configure(bg="#F3F5F9")
+        super().__init__(); self.title(f"{APP_NAME}  {VERSION}"); self.geometry("1480x900"); self.minsize(1180,760); self.configure(bg=BG)
         self.idx=Indexer(); self.idx.init(); self.cfg=self.load_cfg(); self.results={}; self.selected_drug=None
         self.setup_style(); self.build(); self.refresh_status()
     def load_cfg(self):
         try:return json.loads(CFG_PATH.read_text(encoding="utf-8"))
         except:return {}
     def save_cfg(self): CFG_PATH.write_text(json.dumps(self.cfg,ensure_ascii=False,indent=2),encoding="utf-8")
+    def ui_font(self, size=10, weight="normal"):
+        # Arial 우선, 한글은 Windows font fallback으로 NanumGothic/Malgun Gothic 사용
+        return ("Arial", size, weight)
     def setup_style(self):
         s=ttk.Style(self); s.theme_use("clam")
-        s.configure("TFrame",background="#F3F5F9"); s.configure("Surface.TFrame",background="#FFFFFF")
-        s.configure("TLabel",background="#F3F5F9",foreground="#111827",font=("Segoe UI",10))
-        s.configure("Surface.TLabel",background="#FFFFFF",foreground="#111827",font=("Segoe UI",10))
-        s.configure("Title.TLabel",background="#F3F5F9",foreground="#111827",font=("Segoe UI",22,"bold"))
-        s.configure("Muted.TLabel",background="#F3F5F9",foreground="#667085",font=("Segoe UI",9))
-        s.configure("TButton",font=("Segoe UI",9),padding=(12,8))
-        s.configure("Primary.TButton",background="#2563EB",foreground="white",borderwidth=0); s.map("Primary.TButton",background=[("active","#1D4ED8")])
-        s.configure("Treeview",font=("Segoe UI",9),rowheight=31,background="white",fieldbackground="white",borderwidth=0)
-        s.configure("Treeview.Heading",font=("Segoe UI",9,"bold"),background="#F8FAFC",foreground="#475467")
-        s.configure("TNotebook",background="#F3F5F9",borderwidth=0); s.configure("TNotebook.Tab",font=("Segoe UI",10,"bold"),padding=(18,10))
+        s.configure("TFrame",background=BG); s.configure("Surface.TFrame",background=PANEL)
+        s.configure("TLabel",background=BG,foreground=TEXT,font=self.ui_font(10))
+        s.configure("Surface.TLabel",background=PANEL,foreground=TEXT,font=self.ui_font(10))
+        s.configure("Title.TLabel",background=BG,foreground=DEEP_SAGE,font=self.ui_font(22,"bold"))
+        s.configure("Muted.TLabel",background=BG,foreground=MUTED,font=self.ui_font(9))
+        s.configure("TButton",font=self.ui_font(9,"bold"),padding=(13,9),background="#F1EFEA",foreground=TEXT,borderwidth=0)
+        s.map("TButton",background=[("active","#E9E5DE")])
+        s.configure("Primary.TButton",background=DEEP_SAGE,foreground="white",borderwidth=0)
+        s.map("Primary.TButton",background=[("active",SAGE)])
+        s.configure("Treeview",font=self.ui_font(10),rowheight=38,background=PANEL,fieldbackground=PANEL,foreground=TEXT,borderwidth=0)
+        s.map("Treeview",background=[("selected",SAGE_SOFT)],foreground=[("selected",DEEP_SAGE)])
+        s.configure("Treeview.Heading",font=self.ui_font(9,"bold"),background="#F0F2EC",foreground=DEEP_SAGE,relief="flat",padding=(8,8))
+        s.configure("TNotebook",background=BG,borderwidth=0); s.configure("TNotebook.Tab",font=self.ui_font(10,"bold"),padding=(20,11),background="#ECE9E2",foreground=MUTED)
+        s.map("TNotebook.Tab",background=[("selected",PANEL)],foreground=[("selected",TERRA)])
     def build(self):
-        root=ttk.Frame(self); root.pack(fill="both",expand=True,padx=24,pady=20)
+        root=ttk.Frame(self); root.pack(fill="both",expand=True,padx=26,pady=22)
         top=ttk.Frame(root); top.pack(fill="x",pady=(0,16))
         ttk.Label(top,text="DUR Dashboard",style="Title.TLabel").pack(side="left")
         ttk.Label(top,text="의약품 DUR 통합 조회 · 로컬 전용",style="Muted.TLabel").pack(side="left",padx=16,pady=(10,0))
@@ -234,29 +242,31 @@ class App(tk.Tk):
         self.main=ttk.Frame(body); self.main.pack(side="left",fill="both",expand=True)
         self.build_left(); self.build_main()
     def build_left(self):
-        ttk.Label(self.left,text="기준파일",style="Surface.TLabel",font=("Segoe UI",13,"bold")).pack(anchor="w",padx=20,pady=(20,4))
-        ttk.Label(self.left,text="8개 Excel을 한 번에 선택하면 파일명과\n시트 구조를 분석해 자동 분류합니다.",style="Surface.TLabel",foreground="#667085",font=("Malgun Gothic",9)).pack(anchor="w",padx=20,pady=(0,14))
-        ttk.Button(self.left,text="＋  DUR 파일 한 번에 등록",style="Primary.TButton",command=self.choose_files).pack(fill="x",padx=18,pady=(0,14))
+        tk.Label(self.left,text="기준 파일",bg=PANEL,fg=DEEP_SAGE,font=self.ui_font(14,"bold")).pack(anchor="w",padx=20,pady=(20,4))
+        tk.Label(self.left,text="8개 Excel을 한 번에 선택하면 자동 분류 후 인덱싱합니다.",bg=PANEL,fg=MUTED,font=self.ui_font(9),wraplength=285,justify="left").pack(anchor="w",padx=20,pady=(0,14))
+        ttk.Button(self.left,text="＋  DUR 파일 일괄 등록",style="Primary.TButton",command=self.choose_files).pack(fill="x",padx=18,pady=(0,14))
         self.slot_widgets={}
         for key,label in CATEGORIES:
-            f=tk.Frame(self.left,bg="white"); f.pack(fill="x",padx=18,pady=3)
-            dot=tk.Label(f,text="●",bg="white",fg="#D0D5DD",font=("Segoe UI",8)); dot.pack(side="left",padx=(0,8))
-            name=tk.Label(f,text=label,bg="white",fg="#344054",font=("Malgun Gothic",9),anchor="w"); name.pack(side="left",fill="x",expand=True)
-            st=tk.Label(f,text="미등록",bg="white",fg="#98A2B3",font=("Malgun Gothic",8),anchor="e"); st.pack(side="right")
-            self.slot_widgets[key]=(dot,st)
+            f=tk.Frame(self.left,bg=PANEL); f.pack(fill="x",padx=18,pady=4)
+            dot=tk.Label(f,text="●",bg=PANEL,fg="#C8CBC4",font=self.ui_font(8)); dot.pack(side="left",padx=(0,8),anchor="n")
+            mid=tk.Frame(f,bg=PANEL); mid.pack(side="left",fill="x",expand=True)
+            tk.Label(mid,text=label,bg=PANEL,fg=TEXT,font=self.ui_font(9,"bold"),anchor="w").pack(fill="x")
+            date=tk.Label(mid,text="마지막 등록 —",bg=PANEL,fg="#9A9D96",font=self.ui_font(8),anchor="w"); date.pack(fill="x",pady=(1,0))
+            st=tk.Label(f,text="미등록",bg=PANEL,fg="#9A9D96",font=self.ui_font(8),anchor="e"); st.pack(side="right",padx=(6,0))
+            self.slot_widgets[key]=(dot,st,date)
         ttk.Separator(self.left).pack(fill="x",padx=18,pady=14)
-        self.upload_note=tk.Label(self.left,text="파일을 등록하면 원본의 모든 시트를 읽어\n로컬 검색 인덱스를 생성합니다.",bg="white",fg="#98A2B3",font=("Malgun Gothic",8),justify="left"); self.upload_note.pack(anchor="w",padx=20)
+        self.upload_note=tk.Label(self.left,text="파일은 PC 내부에서만 처리됩니다.",bg=PANEL,fg=MUTED,font=self.ui_font(8),justify="left"); self.upload_note.pack(anchor="w",padx=20)
         ttk.Button(self.left,text="등록 파일 다시 인덱싱",command=self.reindex_all).pack(fill="x",padx=18,pady=16)
     def build_main(self):
-        search=tk.Frame(self.main,bg="white",highlightbackground="#E4E7EC",highlightthickness=1); search.pack(fill="x")
-        tk.Label(search,text="품목 일괄 검색",bg="white",fg="#101828",font=("Malgun Gothic",12,"bold")).pack(anchor="w",padx=20,pady=(16,4))
-        tk.Label(search,text="품목명을 한 줄에 하나씩 입력하세요. 일부 이름도 검색할 수 있습니다.",bg="white",fg="#667085",font=("Malgun Gothic",9)).pack(anchor="w",padx=20)
-        row=tk.Frame(search,bg="white"); row.pack(fill="x",padx=20,pady=(10,16))
-        self.multi=tk.Text(row,height=4,font=("Malgun Gothic",11),relief="flat",bg="#F8FAFC",fg="#101828",insertbackground="#101828",padx=12,pady=10,highlightthickness=1,highlightbackground="#EAECF0"); self.multi.pack(side="left",fill="x",expand=True)
+        search=tk.Frame(self.main,bg=PANEL,highlightbackground=BORDER,highlightthickness=1); search.pack(fill="x")
+        tk.Label(search,text="품목 일괄 검색",bg=PANEL,fg=TEXT,font=self.ui_font(13,"bold")).pack(anchor="w",padx=20,pady=(16,4))
+        tk.Label(search,text="품목명을 한 줄에 하나씩 입력하세요. 일부 이름도 검색할 수 있습니다.",bg=PANEL,fg=MUTED,font=self.ui_font(9)).pack(anchor="w",padx=20)
+        row=tk.Frame(search,bg=PANEL); row.pack(fill="x",padx=20,pady=(10,16))
+        self.multi=tk.Text(row,height=4,font=self.ui_font(11),relief="flat",bg=NO_BG,fg=TEXT,insertbackground="#101828",padx=12,pady=10,highlightthickness=1,highlightbackground=BORDER); self.multi.pack(side="left",fill="x",expand=True)
         self.multi.insert("1.0","예)\n마운자로\n쎄레빅스\n암로젯")
         self.multi.bind("<FocusIn>",self.clear_example)
         ttk.Button(row,text="통합 조회",style="Primary.TButton",command=self.batch_search).pack(side="left",padx=(12,0),fill="y")
-        self.summary=tk.Label(self.main,text="검색할 품목을 입력해 주세요.",bg="#F3F5F9",fg="#667085",font=("Malgun Gothic",9),anchor="w"); self.summary.pack(fill="x",pady=(12,8))
+        self.summary=tk.Label(self.main,text="검색할 품목을 입력해 주세요.",bg=BG,fg=MUTED,font=self.ui_font(9),anchor="w"); self.summary.pack(fill="x",pady=(12,8))
         self.tabs=ttk.Notebook(self.main); self.tabs.pack(fill="both",expand=True)
         self.by_drug=ttk.Frame(self.tabs,style="Surface.TFrame"); self.by_dur=ttk.Frame(self.tabs,style="Surface.TFrame")
         self.tabs.add(self.by_drug,text="약품별 결과"); self.tabs.add(self.by_dur,text="DUR 종류별 결과")
@@ -265,21 +275,21 @@ class App(tk.Tk):
         if self.multi.get("1.0","end").strip().startswith("예)"): self.multi.delete("1.0","end")
     def build_drug_tab(self):
         pane=tk.PanedWindow(self.by_drug,orient="horizontal",bg="#EAECF0",sashwidth=1,bd=0); pane.pack(fill="both",expand=True)
-        left=tk.Frame(pane,bg="white",width=280); right=tk.Frame(pane,bg="white"); pane.add(left,minsize=230); pane.add(right,minsize=600)
-        tk.Label(left,text="검색 품목",bg="white",fg="#101828",font=("Malgun Gothic",10,"bold")).pack(anchor="w",padx=16,pady=(14,8))
-        self.drug_list=tk.Listbox(left,font=("Malgun Gothic",9),relief="flat",bd=0,highlightthickness=0,selectbackground="#EFF6FF",selectforeground="#1D4ED8",activestyle="none"); self.drug_list.pack(fill="both",expand=True,padx=8,pady=(0,8)); self.drug_list.bind("<<ListboxSelect>>",self.select_drug)
-        self.drug_title=tk.Label(right,text="품목을 선택해 주세요",bg="white",fg="#101828",font=("Malgun Gothic",15,"bold")); self.drug_title.pack(anchor="w",padx=18,pady=(16,10))
-        self.cards_frame=tk.Frame(right,bg="white"); self.cards_frame.pack(fill="x",padx=18); self.cards={}
+        left=tk.Frame(pane,bg=PANEL,width=280); right=tk.Frame(pane,bg=PANEL); pane.add(left,minsize=230); pane.add(right,minsize=600)
+        tk.Label(left,text="검색 품목",bg=PANEL,fg=TEXT,font=self.ui_font(10,"bold")).pack(anchor="w",padx=16,pady=(14,8))
+        self.drug_list=tk.Listbox(left,font=self.ui_font(9),relief="flat",bd=0,highlightthickness=0,selectbackground=SAGE_SOFT,selectforeground=DEEP_SAGE,activestyle="none"); self.drug_list.pack(fill="both",expand=True,padx=8,pady=(0,8)); self.drug_list.bind("<<ListboxSelect>>",self.select_drug)
+        self.drug_title=tk.Label(right,text="품목을 선택해 주세요",bg=PANEL,fg=TEXT,font=self.ui_font(17,"bold")); self.drug_title.pack(anchor="w",padx=18,pady=(16,10))
+        self.cards_frame=tk.Frame(right,bg=PANEL); self.cards_frame.pack(fill="x",padx=18); self.cards={}
         for i,(key,label) in enumerate(DUR_CARDS):
-            f=tk.Frame(self.cards_frame,bg="#F8FAFC",highlightbackground="#EAECF0",highlightthickness=1,height=74); f.grid(row=i//4,column=i%4,sticky="nsew",padx=(0 if i%4==0 else 7,0),pady=(0,7)); f.grid_propagate(False)
-            tk.Label(f,text=label,bg="#F8FAFC",fg="#667085",font=("Malgun Gothic",8)).pack(anchor="w",padx=11,pady=(10,2))
-            val=tk.Label(f,text="—",bg="#F8FAFC",fg="#667085",font=("Malgun Gothic",10,"bold")); val.pack(anchor="w",padx=11)
+            f=tk.Frame(self.cards_frame,bg=NO_BG,highlightbackground=BORDER,highlightthickness=1,height=74); f.grid(row=i//4,column=i%4,sticky="nsew",padx=(0 if i%4==0 else 7,0),pady=(0,7)); f.grid_propagate(False)
+            tk.Label(f,text=label,bg=NO_BG,fg=MUTED,font=self.ui_font(8)).pack(anchor="w",padx=11,pady=(10,2))
+            val=tk.Label(f,text="—",bg=NO_BG,fg=MUTED,font=self.ui_font(10,"bold")); val.pack(anchor="w",padx=11)
             f.bind("<Button-1>",lambda e,k=key:self.show_detail(k)); val.bind("<Button-1>",lambda e,k=key:self.show_detail(k)); self.cards[key]=(f,val)
         for i in range(4): self.cards_frame.columnconfigure(i,weight=1)
-        self.detail_title=tk.Label(right,text="상세정보",bg="white",fg="#101828",font=("Malgun Gothic",10,"bold")); self.detail_title.pack(anchor="w",padx=18,pady=(8,6))
+        self.detail_title=tk.Label(right,text="상세정보",bg=PANEL,fg=TEXT,font=self.ui_font(10,"bold")); self.detail_title.pack(anchor="w",padx=18,pady=(8,6))
         self.detail=ttk.Treeview(right,columns=("항목","내용"),show="headings"); self.detail.heading("항목",text="항목"); self.detail.heading("내용",text="내용"); self.detail.column("항목",width=175,anchor="w"); self.detail.column("내용",width=650,anchor="w"); self.detail.pack(fill="both",expand=True,padx=18,pady=(0,16))
     def build_dur_tab(self):
-        tk.Label(self.by_dur,text="DUR 종류별 해당 품목",bg="white",fg="#101828",font=("Malgun Gothic",12,"bold")).pack(anchor="w",padx=18,pady=(16,8))
+        tk.Label(self.by_dur,text="DUR 종류별 해당 품목",bg=PANEL,fg=TEXT,font=self.ui_font(13,"bold")).pack(anchor="w",padx=18,pady=(16,8))
         self.dur_tree=ttk.Treeview(self.by_dur,columns=("DUR","품목","판정","상세 요약"),show="headings")
         for c,w in (("DUR",180),("품목",300),("판정",130),("상세 요약",600)):
             self.dur_tree.heading(c,text=c); self.dur_tree.column(c,width=w,anchor="w")
@@ -333,10 +343,10 @@ class App(tk.Tk):
             for old in (ROOT_DIR/"files").glob(k+"__*"):
                 try:old.unlink()
                 except:pass
-            shutil.copy2(p,dest); self.cfg[k]=str(dest)
+            shutil.copy2(p,dest); self.cfg[k]=str(dest); self.cfg.setdefault("_uploaded_at",{})[k]=datetime.now().isoformat(timespec="minutes")
         self.save_cfg(); self.index_many([(k,Path(self.cfg[k])) for k in classified])
     def index_many(self,items):
-        self.upload_note.config(text=f"{len(items)}개 파일 자동 분류 완료 · 인덱싱 중…",fg="#2563EB")
+        self.upload_note.config(text=f"{len(items)}개 파일 자동 분류 완료 · 인덱싱 중…",fg=DEEP_SAGE)
         def worker():
             errors=[]
             for k,p in items:
@@ -347,20 +357,24 @@ class App(tk.Tk):
             self.after(0,lambda:self.index_many_done(errors,len(items)))
         threading.Thread(target=worker,daemon=True).start()
     def set_slot_working(self,k):
-        dot,st=self.slot_widgets[k]; dot.config(fg="#2563EB"); st.config(text="인덱싱 중",fg="#2563EB")
+        dot,st,date=self.slot_widgets[k]; dot.config(fg=DEEP_SAGE); st.config(text="인덱싱 중",fg=DEEP_SAGE)
     def index_many_done(self,errors,n):
-        self.refresh_status(); self.upload_note.config(text=f"{n}개 파일 등록/인덱싱 완료" if not errors else "일부 파일 인덱싱 오류",fg="#027A48" if not errors else "#B42318")
+        self.refresh_status(); self.upload_note.config(text=f"{n}개 파일 등록/인덱싱 완료" if not errors else "일부 파일 인덱싱 오류",fg=DEEP_SAGE if not errors else "#B42318")
         messagebox.showinfo("완료" if not errors else "확인 필요", "DUR 기준파일 인덱싱이 완료되었습니다." if not errors else "\n".join(errors))
     def refresh_status(self):
-        sts=self.idx.statuses(); good=0
+        sts=self.idx.statuses(); good=0; upload_times=self.cfg.get("_uploaded_at",{}); recent=[]
         for key,label in CATEGORIES:
-            dot,st=self.slot_widgets[key]; v=sts.get(key)
-            if v and v[0]: good+=1; dot.config(fg="#12B76A"); st.config(text=f"{v[4]}시트 · {v[5]:,}건",fg="#027A48")
-            elif v: dot.config(fg="#F04438"); st.config(text="오류",fg="#B42318")
-            else: dot.config(fg="#D0D5DD"); st.config(text="미등록",fg="#98A2B3")
-        self.global_status.config(text=f"기준파일 {good}/8 정상")
+            dot,st,date=self.slot_widgets[key]; v=sts.get(key); stamp=upload_times.get(key)
+            date.config(text="마지막 등록 "+(stamp.replace("T"," ")[:16] if stamp else "—"))
+            if stamp: recent.append(stamp)
+            if v and v[0]:
+                good+=1; dot.config(fg=SAGE); st.config(text=f"정상 · {v[4]}시트",fg=DEEP_SAGE)
+            elif v: dot.config(fg=ERROR); st.config(text="오류",fg=ERROR)
+            else: dot.config(fg="#C8CBC4"); st.config(text="미등록",fg="#9A9D96")
+        latest=max(recent).replace("T"," ")[:16] if recent else "—"
+        self.global_status.config(text=f"기준파일 {good}/8 정상   ·   최종 등록 {latest}")
     def reindex_all(self):
-        items=[(k,Path(v)) for k,v in self.cfg.items() if Path(v).exists()]
+        items=[(k,Path(v)) for k,v in self.cfg.items() if k in dict(CATEGORIES) and isinstance(v,str) and Path(v).exists()]
         if not items:return messagebox.showwarning("기준파일 없음","먼저 Excel 파일을 등록해 주세요.")
         self.index_many(items)
     def batch_search(self):
@@ -396,7 +410,7 @@ class App(tk.Tk):
     def mapping(self):return {"combo":["combo_paid","combo_unpaid"],"age":["age"],"preg":["preg"],"lact":["lact"],"dup":["dup"],"tele":["tele"],"cost":["cost"]}
     def has_hits(self,data,key):return any(data.get(c) for c in self.mapping()[key])
     def paint_empty_cards(self,text):
-        for key,_ in DUR_CARDS:self.set_card(key,text,"#FFF7ED","#B54708")
+        for key,_ in DUR_CARDS:self.set_card(key,text,WARN_BG,WARN)
     def set_card(self,key,text,bg,fg):
         f,val=self.cards[key]; f.config(bg=bg); val.config(text=text,bg=bg,fg=fg)
         for w in f.winfo_children():
@@ -420,9 +434,9 @@ class App(tk.Tk):
     def paint_cards(self,data):
         for key,_ in DUR_CARDS:
             v=self.verdict(data,key)
-            if v.startswith("○"): self.set_card(key,v,"#ECFDF3","#027A48")
-            elif v=="확인불가": self.set_card(key,v,"#FFF7ED","#B54708")
-            else:self.set_card(key,v,"#F8FAFC","#667085")
+            if v.startswith("○"): self.set_card(key,v,SAGE_SOFT,DEEP_SAGE)
+            elif v=="확인불가": self.set_card(key,v,WARN_BG,WARN)
+            else:self.set_card(key,v,NO_BG,NO)
     def visible_field(self,key):
         """조회 화면에서는 코드류와 업체명은 숨긴다. 검색/식별용 내부 데이터는 유지 가능."""
         n=norm(key)
@@ -435,10 +449,20 @@ class App(tk.Tk):
         rows=[]
         for cat in self.mapping()[key]:
             for hit in r["data"][cat]:
-                rows += [("구분",dict(CATEGORIES)[cat]),("원본 시트",hit["sheet"]),("일치 품목",hit["product"])]
-                for k,v in hit["data"].items():
-                    if v and self.visible_field(k): rows.append((k,v))
-                rows.append(("────────","────────"))
+                d=hit["data"]
+                if key=="combo":
+                    other="B" if hit["side"]=="A" else "A"
+                    rows.append(("상대 품목",self.find_value(d,[f"제품명{other}",f"품목명{other}"]) or "—"))
+                    rows.append(("상대 성분",self.find_value(d,[f"성분명{other}"]) or "—"))
+                    rows.append(("급여 구분",self.find_value(d,["급여여부A"]) or dict(CATEGORIES)[cat].replace("병용금기 ","")))
+                    rows.append(("고시번호",self.find_value(d,["고시번호"]) or "—"))
+                    rows.append(("고시일자",self.find_value(d,["고시일자"]) or "—"))
+                    rows.append(("상세내용",self.find_value(d,["상세정보"]) or "파일에서 확인되지 않음"))
+                else:
+                    for k,v in d.items():
+                        if v and self.visible_field(k) and norm(k) not in (norm("원본시트"),norm("원본파일명"),norm("기준년월")):
+                            rows.append((k,v))
+                rows.append(("",""))
         if not rows:rows=[("결과",self.verdict(r["data"],key))]
         for a,b in rows:self.detail.insert("","end",values=(a,b))
     def render_dur_view(self):
