@@ -14,6 +14,7 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: read
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,15 +42,16 @@ jobs:
           New-Item -ItemType Directory -Force -Path release | Out-Null
           Copy-Item dist\DUR_Dashboard.exe release\DUR_Dashboard.exe
           Set-Content -Path release\README.txt -Encoding UTF8 -Value @'
-          DUR Dashboard
-          =============
+          DUR Dashboard v1.3
+          ==================
           1. DUR_Dashboard.exe를 실행합니다.
-          2. 왼쪽 기준파일 관리 영역에서 8개 DUR Excel 원본을 등록합니다.
-          3. 품목명 일부를 입력하여 후보 품목을 선택합니다.
-          4. 7개 DUR 카드와 상세정보를 확인합니다.
+          2. 상단 '기준파일 관리'에서 8개 DUR Excel을 한 번에 선택합니다.
+          3. 프로그램이 파일을 자동 분류한 뒤 모든 시트를 인덱싱합니다.
+          4. 'DUR 조회'에서 여러 품목을 쉼표/세미콜론 또는 여러 줄로 입력합니다.
+          5. 약품별 결과와 DUR 종류별 결과를 확인합니다.
 
-          프로그램은 등록한 Excel을 사용자 PC의 로컬 영역으로 복사하고 로컬 검색 인덱스를 만듭니다.
-          원본 DUR 파일이 갱신되면 해당 항목의 Excel을 다시 등록하세요.
+          병용금기 급여/비급여 파일은 A,D,F,G,J,M,N,O 열만 인덱싱합니다.
+          등록 Excel과 검색 인덱스는 사용자 PC의 로컬 영역에만 저장됩니다.
           '@
           Compress-Archive -Path release\* -DestinationPath DUR_Dashboard_Windows.zip -Force
 
