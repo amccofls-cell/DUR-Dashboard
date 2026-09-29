@@ -15,7 +15,7 @@ from tkinter import ttk, filedialog, messagebox
 from openpyxl import load_workbook
 
 APP_NAME = "DUR 약물안전성 조회"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 CATEGORIES = [
     ("combo_paid", "병용금기 급여"),
@@ -82,6 +82,40 @@ def norm(v):
     s = s.replace("㎖", "ml").replace("밀리리터", "ml").replace("밀리그램", "mg")
     s = re.sub(r"[()\[\]{}·,._\-/]", "", s)
     return s
+
+
+def product_core(v):
+    """Cross-list matching key: keep product name/strength, ignore ingredient/export/package parentheses."""
+    if v is None:
+        return ""
+    s = str(v).strip()
+    s = re.sub(r"_\s*\([^)]*\)\s*$", "", s)
+    s = re.sub(r"\([^)]*\)", "", s)
+    return norm(s)
+
+
+def split_top_level_aliases(v):
+    """Split comma/semicolon separated aliases, but keep punctuation inside parentheses."""
+    text = "" if v is None else str(v).strip()
+    if not text:
+        return []
+    out, buf, depth = [], [], 0
+    for ch in text:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+        if ch in ",;" and depth == 0:
+            part = "".join(buf).strip()
+            if part:
+                out.append(part)
+            buf = []
+        else:
+            buf.append(ch)
+    part = "".join(buf).strip()
+    if part:
+        out.append(part)
+    return out or [text]
 
 
 def sval(v):
@@ -196,9 +230,13 @@ class Indexer:
             c.execute(
                 "CREATE TABLE IF NOT EXISTS records("
                 "id INTEGER PRIMARY KEY, category TEXT, sheet TEXT, product TEXT, "
-                "product_norm TEXT, side TEXT, data TEXT)"
+                "product_norm TEXT, core_norm TEXT, side TEXT, data TEXT)"
             )
+            cols = [r[1] for r in c.execute("PRAGMA table_info(records)").fetchall()]
+            if "core_norm" not in cols:
+                c.execute("ALTER TABLE records ADD COLUMN core_norm TEXT DEFAULT ''")
             c.execute("CREATE INDEX IF NOT EXISTS ix_records_cat_name ON records(category,product_norm)")
+            c.execute("CREATE INDEX IF NOT EXISTS ix_records_cat_core ON records(category,core_norm)")
             c.execute(
                 "CREATE TABLE IF NOT EXISTS status("
                 "category TEXT PRIMARY KEY, ok INTEGER, message TEXT, filename TEXT, "
@@ -227,12 +265,15 @@ class Indexer:
                     for item in iterator:
                         if category.startswith("combo"):
                             d = item
-                            for side, p in (("A", d.get("제품명A", "")), ("B", d.get("제품명B", ""))):
-                                if p:
-                                    batch.append((category, ws.title, p, norm(p), side, json.dumps(d, ensure_ascii=False)))
+                            for side, product_name in (("A", d.get("제품명A", "")), ("B", d.get("제품명B", ""))):
+                                if product_name:
+                                    batch.append((
+                                        category, ws.title, product_name, norm(product_name),
+                                        product_core(product_name), side, json.dumps(d, ensure_ascii=False)
+                                    ))
                             if len(batch) >= 2500:
                                 c.executemany(
-                                    "INSERT INTO records(category,sheet,product,product_norm,side,data) VALUES(?,?,?,?,?,?)",
+                                    "INSERT INTO records(category,sheet,product,product_norm,core_norm,side,data) VALUES(?,?,?,?,?,?,?)",
                                     batch,
                                 )
                                 total += len(batch)
@@ -244,25 +285,34 @@ class Indexer:
                         if category == "cost":
                             low = next((d[k] for k in d if "저함량" in k and "제품명" in k), "")
                             high = next((d[k] for k in d if "고함량" in k and "제품명" in k), "")
-                            for side, p in (("저함량", low), ("고함량", high)):
-                                if p:
-                                    batch.append((category, ws.title, p, norm(p), side, json.dumps(d, ensure_ascii=False)))
+                            for side, product_name in (("저함량", low), ("고함량", high)):
+                                if product_name:
+                                    batch.append((
+                                        category, ws.title, product_name, norm(product_name),
+                                        product_core(product_name), side, json.dumps(d, ensure_ascii=False)
+                                    ))
                         else:
                             a, _ = detect_name_cols(headers, category)
                             for i in a:
-                                p = sval(row[i]) if i < len(row) else ""
-                                if p:
-                                    batch.append((category, ws.title, p, norm(p), "", json.dumps(d, ensure_ascii=False)))
+                                raw_name = sval(row[i]) if i < len(row) else ""
+                                if not raw_name:
+                                    continue
+                                names = split_top_level_aliases(raw_name) if category == "tele" else [raw_name]
+                                for product_name in names:
+                                    batch.append((
+                                        category, ws.title, product_name, norm(product_name),
+                                        product_core(product_name), "", json.dumps(d, ensure_ascii=False)
+                                    ))
                         if len(batch) >= 2500:
                             c.executemany(
-                                "INSERT INTO records(category,sheet,product,product_norm,side,data) VALUES(?,?,?,?,?,?)",
+                                "INSERT INTO records(category,sheet,product,product_norm,core_norm,side,data) VALUES(?,?,?,?,?,?,?)",
                                 batch,
                             )
                             total += len(batch)
                             batch = []
                     if batch:
                         c.executemany(
-                            "INSERT INTO records(category,sheet,product,product_norm,side,data) VALUES(?,?,?,?,?,?)",
+                            "INSERT INTO records(category,sheet,product,product_norm,core_norm,side,data) VALUES(?,?,?,?,?,?,?)",
                             batch,
                         )
                         total += len(batch)
@@ -301,7 +351,9 @@ class Indexer:
         return [x[0] for x in rows]
 
     def search_product(self, product):
+        """Search selected product across DUR lists with exact-first, safe core-name fallback."""
         np = norm(product)
+        cp = product_core(product)
         out = {k: [] for k, _ in CATEGORIES}
         with self.conn() as c:
             for cat, _ in CATEGORIES:
@@ -309,6 +361,19 @@ class Indexer:
                     "SELECT sheet,product,side,data FROM records WHERE category=? AND product_norm=?",
                     (cat, np),
                 ).fetchall()
+                if not rows and cp and len(cp) >= 4:
+                    rows = c.execute(
+                        "SELECT sheet,product,side,data FROM records WHERE category=? AND core_norm=?",
+                        (cat, cp),
+                    ).fetchall()
+                # Backward-compatible fallback for an existing v1.3 index.
+                # Age/telemedicine files sometimes have extra ingredient/export-name text
+                # or several aliases in a single cell, so exact full-string matching misses them.
+                if not rows and cp and len(cp) >= 5 and cat in ("age", "tele"):
+                    rows = c.execute(
+                        "SELECT sheet,product,side,data FROM records WHERE category=? AND product_norm LIKE ?",
+                        (cat, f"%{cp}%"),
+                    ).fetchall()
                 out[cat] = [
                     {"sheet": r[0], "product": r[1], "side": r[2], "data": json.loads(r[3])}
                     for r in rows
@@ -1034,7 +1099,7 @@ class App(tk.Tk):
         if key == "age":
             x = data["age"][0]["data"]
             age = self.find_value(x, ["특정연령"])
-            unit = self.find_value(x, ["연령단위"])
+            unit = self.find_value(x, ["특정연령단위", "특정연령단위코드", "연령단위"])
             cond = self.find_value(x, ["연령처리조건"])
             return "○ " + (" ".join(z for z in [age + unit if age else "", cond] if z) or "해당")
         return f"○ 해당 ({hits})" if hits > 1 else "○ 해당"
@@ -1123,20 +1188,79 @@ class App(tk.Tk):
         queries = list(dict.fromkeys(queries))
         if not queries:
             return
-        self.results = {}
-        for q in queries:
-            vals = self.idx.suggestions(q, 60)
-            if not vals:
-                self.results[q] = {"query": q, "matched": None, "data": None, "candidates": []}
-                continue
-            nq = norm(q)
-            exact = [v for v in vals if norm(v) == nq]
-            matched = exact[0] if exact else vals[0]
-            self.results[q] = {"query": q, "matched": matched, "data": self.idx.search_product(matched), "candidates": vals}
-        self.selected_drug = next(iter(self.results.keys()), None)
-        self.result_mode = "drug"
-        self.paint_mode_tabs()
-        self.render_main_mode()
+        self.open_candidate_dialog(queries)
+
+    def open_candidate_dialog(self, queries):
+        """Resolve every partial query to an explicit user-selected product before DUR lookup."""
+        candidate_map = {q: self.idx.suggestions(q, 80) for q in queries}
+
+        d = tk.Toplevel(self)
+        d.title("검색 품목 후보 선택")
+        d.geometry("980x620")
+        d.minsize(760, 430)
+        d.configure(bg=SURFACE)
+        d.transient(self)
+        d.grab_set()
+
+        tk.Label(d, text="검색 품목 후보 선택", bg=SURFACE, fg=TEXT, font=self.font(15, "bold")).pack(anchor="w", padx=24, pady=(20, 4))
+        tk.Label(
+            d,
+            text="입력한 검색어마다 실제 조회할 품목을 선택하세요. 후보가 여러 개인 경우 함량·제형까지 확인할 수 있습니다.",
+            bg=SURFACE, fg=MUTED, font=self.font(9)
+        ).pack(anchor="w", padx=24, pady=(0, 14))
+
+        host = tk.Frame(d, bg=SURFACE)
+        host.pack(fill="both", expand=True, padx=24)
+        canvas = tk.Canvas(host, bg=SURFACE, highlightthickness=0)
+        sb = ttk.Scrollbar(host, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        rows_frame = tk.Frame(canvas, bg=SURFACE)
+        win = canvas.create_window((0, 0), window=rows_frame, anchor="nw")
+        rows_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(win, width=e.width))
+
+        tk.Label(rows_frame, text="입력 검색어", bg=GRAY_SOFT, fg=TEXT_DARK, font=self.font(9, "bold"), anchor="w").grid(row=0, column=0, sticky="ew", padx=(0, 1), ipady=8)
+        tk.Label(rows_frame, text="선택 품목", bg=GRAY_SOFT, fg=TEXT_DARK, font=self.font(9, "bold"), anchor="w").grid(row=0, column=1, sticky="ew", ipady=8)
+        rows_frame.columnconfigure(0, weight=0, minsize=230)
+        rows_frame.columnconfigure(1, weight=1)
+
+        combo_vars = {}
+        for ridx, q in enumerate(queries, start=1):
+            vals = candidate_map[q]
+            tk.Label(rows_frame, text=q, bg=SURFACE, fg=TEXT_DARK, font=self.font(9, "bold"), anchor="w").grid(row=ridx, column=0, sticky="ew", padx=(4, 14), pady=5)
+            display_vals = vals if vals else ["후보 없음"]
+            var = tk.StringVar(value=display_vals[0])
+            cb = ttk.Combobox(rows_frame, textvariable=var, values=display_vals, state="readonly", font=self.font(9))
+            cb.grid(row=ridx, column=1, sticky="ew", padx=(0, 4), pady=5, ipady=3)
+            combo_vars[q] = (var, vals)
+
+        foot = tk.Frame(d, bg=SURFACE)
+        foot.pack(fill="x", padx=24, pady=18)
+
+        def run_selected():
+            self.results = {}
+            for q in queries:
+                var, vals = combo_vars[q]
+                matched = var.get().strip() if vals else None
+                if not matched or matched == "후보 없음":
+                    self.results[q] = {"query": q, "matched": None, "data": None, "candidates": vals}
+                else:
+                    self.results[q] = {
+                        "query": q,
+                        "matched": matched,
+                        "data": self.idx.search_product(matched),
+                        "candidates": vals,
+                    }
+            d.destroy()
+            self.selected_drug = next(iter(self.results.keys()), None)
+            self.result_mode = "drug"
+            self.paint_mode_tabs()
+            self.render_main_mode()
+
+        self.make_button(foot, "취소", d.destroy).pack(side="right")
+        self.make_button(foot, "선택 품목으로 조회", run_selected, primary=True).pack(side="right", padx=(0, 8))
 
     # ---------- file handling ----------
     def classify_file(self, path):
