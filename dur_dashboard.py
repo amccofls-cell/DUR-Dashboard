@@ -15,7 +15,7 @@ from tkinter import ttk, filedialog, messagebox
 from openpyxl import load_workbook
 
 APP_NAME = "DUR 약물안전성 조회"
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 
 CATEGORIES = [
     ("combo_paid", "병용금기 급여"),
@@ -216,6 +216,22 @@ def normal_rows(ws):
         yield headers, row
 
 
+def record_product_code(d, category, side=""):
+    """Internal-only product code for reliable cross-DUR matching; never displayed."""
+    if category.startswith("combo"):
+        return ""
+    if category == "cost":
+        prefix = "저함량" if side == "저함량" else "고함량"
+        for k, v in d.items():
+            if prefix in k and "제품코드" in k and sval(v):
+                return sval(v)
+        return ""
+    for key in ("제품코드", "약품코드"):
+        if sval(d.get(key)):
+            return sval(d.get(key))
+    return ""
+
+
 class Indexer:
     def __init__(self, db_path=DB_PATH):
         self.db_path = db_path
@@ -230,13 +246,16 @@ class Indexer:
             c.execute(
                 "CREATE TABLE IF NOT EXISTS records("
                 "id INTEGER PRIMARY KEY, category TEXT, sheet TEXT, product TEXT, "
-                "product_norm TEXT, core_norm TEXT, side TEXT, data TEXT)"
+                "product_norm TEXT, core_norm TEXT, product_code TEXT, side TEXT, data TEXT)"
             )
             cols = [r[1] for r in c.execute("PRAGMA table_info(records)").fetchall()]
             if "core_norm" not in cols:
                 c.execute("ALTER TABLE records ADD COLUMN core_norm TEXT DEFAULT ''")
+            if "product_code" not in cols:
+                c.execute("ALTER TABLE records ADD COLUMN product_code TEXT DEFAULT ''")
             c.execute("CREATE INDEX IF NOT EXISTS ix_records_cat_name ON records(category,product_norm)")
             c.execute("CREATE INDEX IF NOT EXISTS ix_records_cat_core ON records(category,core_norm)")
+            c.execute("CREATE INDEX IF NOT EXISTS ix_records_cat_code ON records(category,product_code)")
             c.execute(
                 "CREATE TABLE IF NOT EXISTS status("
                 "category TEXT PRIMARY KEY, ok INTEGER, message TEXT, filename TEXT, "
@@ -269,11 +288,11 @@ class Indexer:
                                 if product_name:
                                     batch.append((
                                         category, ws.title, product_name, norm(product_name),
-                                        product_core(product_name), side, json.dumps(d, ensure_ascii=False)
+                                        product_core(product_name), "", side, json.dumps(d, ensure_ascii=False)
                                     ))
                             if len(batch) >= 2500:
                                 c.executemany(
-                                    "INSERT INTO records(category,sheet,product,product_norm,core_norm,side,data) VALUES(?,?,?,?,?,?,?)",
+                                    "INSERT INTO records(category,sheet,product,product_norm,core_norm,product_code,side,data) VALUES(?,?,?,?,?,?,?,?)",
                                     batch,
                                 )
                                 total += len(batch)
@@ -289,7 +308,7 @@ class Indexer:
                                 if product_name:
                                     batch.append((
                                         category, ws.title, product_name, norm(product_name),
-                                        product_core(product_name), side, json.dumps(d, ensure_ascii=False)
+                                        product_core(product_name), record_product_code(d, category, side), side, json.dumps(d, ensure_ascii=False)
                                     ))
                         else:
                             a, _ = detect_name_cols(headers, category)
@@ -301,18 +320,18 @@ class Indexer:
                                 for product_name in names:
                                     batch.append((
                                         category, ws.title, product_name, norm(product_name),
-                                        product_core(product_name), "", json.dumps(d, ensure_ascii=False)
+                                        product_core(product_name), record_product_code(d, category, ""), "", json.dumps(d, ensure_ascii=False)
                                     ))
                         if len(batch) >= 2500:
                             c.executemany(
-                                "INSERT INTO records(category,sheet,product,product_norm,core_norm,side,data) VALUES(?,?,?,?,?,?,?)",
+                                "INSERT INTO records(category,sheet,product,product_norm,core_norm,product_code,side,data) VALUES(?,?,?,?,?,?,?,?)",
                                 batch,
                             )
                             total += len(batch)
                             batch = []
                     if batch:
                         c.executemany(
-                            "INSERT INTO records(category,sheet,product,product_norm,core_norm,side,data) VALUES(?,?,?,?,?,?,?)",
+                            "INSERT INTO records(category,sheet,product,product_norm,core_norm,product_code,side,data) VALUES(?,?,?,?,?,?,?,?)",
                             batch,
                         )
                         total += len(batch)
@@ -351,34 +370,54 @@ class Indexer:
         return [x[0] for x in rows]
 
     def search_product(self, product):
-        """Search selected product across DUR lists with exact-first, safe core-name fallback."""
+        """Match exact name, core name, internal product code, then safe age/tele fallback."""
         np = norm(product)
         cp = product_core(product)
         out = {k: [] for k, _ in CATEGORIES}
+        raw = {}
+        codes = set()
         with self.conn() as c:
             for cat, _ in CATEGORIES:
                 rows = c.execute(
-                    "SELECT sheet,product,side,data FROM records WHERE category=? AND product_norm=?",
+                    "SELECT sheet,product,product_code,side,data FROM records WHERE category=? AND product_norm=?",
                     (cat, np),
                 ).fetchall()
                 if not rows and cp and len(cp) >= 4:
                     rows = c.execute(
-                        "SELECT sheet,product,side,data FROM records WHERE category=? AND core_norm=?",
+                        "SELECT sheet,product,product_code,side,data FROM records WHERE category=? AND core_norm=?",
                         (cat, cp),
                     ).fetchall()
-                # Backward-compatible fallback for an existing v1.3 index.
-                # Age/telemedicine files sometimes have extra ingredient/export-name text
-                # or several aliases in a single cell, so exact full-string matching misses them.
-                if not rows and cp and len(cp) >= 5 and cat in ("age", "tele"):
-                    rows = c.execute(
-                        "SELECT sheet,product,side,data FROM records WHERE category=? AND product_norm LIKE ?",
-                        (cat, f"%{cp}%"),
+                raw[cat] = rows
+                for r in rows:
+                    if r[2]:
+                        codes.add(str(r[2]).strip())
+
+            if codes:
+                ph = ",".join("?" for _ in codes)
+                for cat, _ in CATEGORIES:
+                    if raw.get(cat) or cat.startswith("combo"):
+                        continue
+                    raw[cat] = c.execute(
+                        f"SELECT sheet,product,product_code,side,data FROM records WHERE category=? AND product_code IN ({ph})",
+                        (cat, *sorted(codes)),
                     ).fetchall()
+
+            for cat in ("age", "tele"):
+                if raw.get(cat) or not cp or len(cp) < 5:
+                    continue
+                raw[cat] = c.execute(
+                    "SELECT sheet,product,product_code,side,data FROM records WHERE category=? AND (product_norm LIKE ? OR core_norm LIKE ?)",
+                    (cat, f"%{cp}%", f"%{cp}%"),
+                ).fetchall()
+
+            for cat, _ in CATEGORIES:
+                rows = raw.get(cat, [])
                 out[cat] = [
-                    {"sheet": r[0], "product": r[1], "side": r[2], "data": json.loads(r[3])}
+                    {"sheet": r[0], "product": r[1], "side": r[3], "data": json.loads(r[4])}
                     for r in rows
                 ]
         return out
+
 
 
 class App(tk.Tk):
