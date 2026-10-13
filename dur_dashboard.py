@@ -16,7 +16,7 @@ from tkinter import ttk, filedialog, messagebox
 from openpyxl import load_workbook
 
 APP_NAME = "DUR 품목리스트 조회 프로그램"
-VERSION = "1.5.1"
+VERSION = "1.5.2"
 
 CATEGORIES = [
     ("combo_paid", "병용금기 급여"),
@@ -434,6 +434,65 @@ class Indexer:
         return self.with_retry(_work)
 
 
+def live_small_file_match(category, path, product, known_codes=None):
+    """Direct fallback for small age/tele workbooks when local SQLite index is stale/incomplete."""
+    known_codes = {str(x).strip() for x in (known_codes or set()) if str(x).strip()}
+    np = norm(product)
+    cp = product_core(product)
+    hits = []
+    p = Path(path)
+    if not p.exists():
+        return hits
+
+    wb = load_workbook(p, read_only=True, data_only=True)
+    try:
+        for ws in wb.worksheets:
+            for headers, row in normal_rows(ws):
+                d = {headers[i]: sval(row[i]) if i < len(row) else "" for i in range(len(headers))}
+                name_cols = detect_name_cols(headers)
+                if not name_cols:
+                    continue
+
+                raw_names = []
+                for i in name_cols:
+                    raw = sval(row[i]) if i < len(row) else ""
+                    if not raw:
+                        continue
+                    raw_names.extend(split_top_level_aliases(raw) if category == "tele" else [raw])
+
+                row_code = record_product_code(d, category, "")
+                matched = False
+                matched_name = ""
+
+                for candidate in raw_names:
+                    if norm(candidate) == np:
+                        matched, matched_name = True, candidate
+                        break
+                    ccore = product_core(candidate)
+                    if cp and ccore == cp:
+                        matched, matched_name = True, candidate
+                        break
+                    if cp and len(cp) >= 5 and (cp in ccore or ccore in cp):
+                        matched, matched_name = True, candidate
+                        break
+
+                if not matched and row_code and row_code in known_codes:
+                    matched = True
+                    matched_name = raw_names[0] if raw_names else product
+
+                if matched:
+                    hits.append({
+                        "sheet": ws.title,
+                        "product": matched_name or product,
+                        "product_code": row_code,
+                        "side": "",
+                        "data": d,
+                    })
+    finally:
+        wb.close()
+    return hits
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -696,7 +755,36 @@ class App(tk.Tk):
         if not self.selected_products:
             messagebox.showwarning("선택 품목 없음", "검색어를 입력한 뒤 자동으로 나타나는 후보에서 품목을 선택해 주세요.")
             return
-        self.results = {p: self.idx.search_product(p) for p in self.selected_products}
+
+        self.results = {}
+        for p in self.selected_products:
+            result = self.idx.search_product(p)
+
+            # Collect any product codes already resolved from other DUR lists.
+            known_codes = set()
+            for hits in result.values():
+                for h in hits:
+                    code = sval(h.get("product_code"))
+                    if code:
+                        known_codes.add(code)
+
+            # Age and telemedicine workbooks are small enough to verify directly on a DB miss.
+            # This protects against stale/incomplete local SQLite indexes from older versions.
+            for cat in ("age", "tele"):
+                if result.get(cat):
+                    continue
+                source = self.cfg.get(cat)
+                if isinstance(source, str) and Path(source).exists():
+                    direct_hits = live_small_file_match(cat, source, p, known_codes)
+                    if direct_hits:
+                        result[cat] = direct_hits
+                        for h in direct_hits:
+                            code = sval(h.get("product_code"))
+                            if code:
+                                known_codes.add(code)
+
+            self.results[p] = result
+
         self.current_product = self.selected_products[0]
         self.render_results()
 
@@ -1014,21 +1102,30 @@ class App(tk.Tk):
                     status_lbl.config(text="● 미등록",fg=MUTED)
 
     def auto_reindex_v151(self):
-        if self.cfg.get("_v151_auto_reindex_done"):
+        # v1.5.2 uses a new migration key so an old v1.5.1 completion flag cannot suppress repair.
+        migration_key = "_index_migration_v152_age_tele"
+        if self.cfg.get(migration_key):
             return
+
         items=[]
         for cat in ("age","tele"):
             p=self.cfg.get(cat)
             if isinstance(p,str) and Path(p).exists():
                 items.append((cat,Path(p)))
-        self.cfg["_v151_auto_reindex_done"]=True
-        self.save_cfg()
+
         if not items:
             return
+
         def worker():
+            all_ok = True
             for cat,path in items:
-                self.idx.index_file(cat,path)
+                ok, _ = self.idx.index_file(cat,path)
+                all_ok = all_ok and ok
+            if all_ok:
+                self.cfg[migration_key] = datetime.now().isoformat(timespec="seconds")
+                self.save_cfg()
             self.after(0,self.refresh_status)
+
         threading.Thread(target=worker,daemon=True).start()
 
 
