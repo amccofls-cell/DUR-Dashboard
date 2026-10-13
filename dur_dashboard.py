@@ -12,11 +12,12 @@ from pathlib import Path
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+from tkinter import font as tkfont
 
 from openpyxl import load_workbook
 
 APP_NAME = "DUR 품목리스트 조회 프로그램"
-VERSION = "1.5.2"
+VERSION = "1.6"
 
 CATEGORIES = [
     ("combo_paid", "병용금기 급여"),
@@ -39,21 +40,30 @@ DUR_CARDS = [
     ("cost", "비용효과적 함량"),
 ]
 
-APP_BG = "#F4F5F2"
+APP_BG = "#F6F8FB"
 SURFACE = "#FFFFFF"
-TEXT = "#183042"
-TEXT_DARK = "#20313D"
-MUTED = "#7D8991"
-BORDER = "#DDE3DF"
-SAGE = "#5E9872"
-SAGE_DEEP = "#3F7B59"
-SAGE_SOFT = "#EEF8F1"
-TERRA = "#C95737"
-TERRA_DEEP = "#A93B24"
-TERRA_SOFT = "#FFF4F0"
-GRAY_SOFT = "#F7F8F7"
-ORANGE = "#E88A2D"
-ERROR = "#B34E46"
+TEXT = "#14233B"
+TEXT_DARK = "#26354D"
+MUTED = "#718096"
+BORDER = "#E1E7EF"
+SAGE = "#14A58C"
+SAGE_DEEP = "#0F816E"
+SAGE_SOFT = "#EAF8F5"
+TERRA = "#2F80ED"
+TERRA_DEEP = "#1769C2"
+TERRA_SOFT = "#EAF3FF"
+GRAY_SOFT = "#F8FAFC"
+ORANGE = "#F59E0B"
+ERROR = "#E14B4B"
+BLUE = "#1976E9"
+BLUE_SOFT = "#EAF4FF"
+RED = "#E64C4C"
+RED_SOFT = "#FFF0F0"
+ORANGE_SOFT = "#FFF6E7"
+PURPLE = "#7B61D1"
+PURPLE_SOFT = "#F4F0FF"
+GREEN = "#0F9D78"
+GREEN_SOFT = "#ECFAF4"
 
 PLACEHOLDER = "품목명의 일부를 입력하세요"
 
@@ -353,6 +363,14 @@ class Indexer:
                 pass
             return False, str(e)
 
+    def delete_category(self, category):
+        """Remove one category from the local search index."""
+        self.init()
+        def _work():
+            with self.lock, self.conn() as c:
+                self.clear_category(c, category)
+        return self.with_retry(_work)
+
     def statuses(self):
         self.init()
         def _work():
@@ -514,6 +532,7 @@ class App(tk.Tk):
             raise
 
         self.cfg = self.load_cfg()
+        self.ui_font = self.resolve_font_family()
         self.selected_products = []
         self.results = {}
         self.current_product = None
@@ -526,7 +545,7 @@ class App(tk.Tk):
 
         self.footer = tk.Label(
             self, text="Created by Chaereen Jeong",
-            bg=APP_BG, fg="#8A948F", font=self.font_en(8)
+            bg=APP_BG, fg="#8A948F", font=self.font_en(9)
         )
         self.footer.place(relx=0.992, rely=0.992, anchor="se")
 
@@ -542,8 +561,19 @@ class App(tk.Tk):
     def save_cfg(self):
         CFG_PATH.write_text(json.dumps(self.cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def font(self, size=10, weight="normal"):
-        return ("NanumGothic", size, weight)
+    def resolve_font_family(self):
+        """Use Pretendard when installed, with safe Windows fallbacks."""
+        try:
+            fams = set(tkfont.families(self))
+            for name in ("Pretendard", "Pretendard Variable", "맑은 고딕", "Malgun Gothic", "Arial"):
+                if name in fams:
+                    return name
+        except Exception:
+            pass
+        return "Malgun Gothic"
+
+    def font(self, size=11, weight="normal"):
+        return (self.ui_font, size, weight)
 
     def font_en(self, size=10, weight="normal"):
         return ("Arial", size, weight)
@@ -551,48 +581,90 @@ class App(tk.Tk):
     def setup_style(self):
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure("Compact.Treeview", font=self.font(9), rowheight=30,
-                        background=SURFACE, fieldbackground=SURFACE, foreground=TEXT_DARK,
-                        borderwidth=0, relief="flat")
-        style.map("Compact.Treeview", background=[("selected", "#E9F2EE")], foreground=[("selected", TEXT_DARK)])
-        style.configure("Compact.Treeview.Heading", font=self.font(9, "bold"),
-                        background="#F8FAF8", foreground="#425563", relief="flat",
-                        borderwidth=0, padding=(7, 7))
+        style.configure(
+            "Compact.Treeview",
+            font=self.font(10),
+            rowheight=36,
+            background=SURFACE,
+            fieldbackground=SURFACE,
+            foreground=TEXT_DARK,
+            borderwidth=0,
+            relief="flat",
+        )
+        style.map(
+            "Compact.Treeview",
+            background=[("selected", "#E8F3FF")],
+            foreground=[("selected", TEXT_DARK)],
+        )
+        style.configure(
+            "Compact.Treeview.Heading",
+            font=self.font(10, "bold"),
+            background="#F3F6FA",
+            foreground="#42526B",
+            relief="flat",
+            borderwidth=0,
+            padding=(8, 10),
+        )
+        style.configure(
+            "Modern.Horizontal.TProgressbar",
+            troughcolor="#EDF1F6",
+            background=BLUE,
+            bordercolor="#EDF1F6",
+            lightcolor=BLUE,
+            darkcolor=BLUE,
+        )
 
     def build_header(self):
-        h = tk.Frame(self, bg=SURFACE, height=70, highlightbackground=BORDER, highlightthickness=1)
+        h = tk.Frame(self, bg=SURFACE, height=82, highlightbackground=BORDER, highlightthickness=1)
         h.pack(fill="x")
         h.pack_propagate(False)
 
         brand = tk.Frame(h, bg=SURFACE)
-        brand.pack(side="left", padx=(26, 36), pady=12)
-        tk.Label(brand, text="❦", bg=SURFACE, fg=SAGE_DEEP,
-                 font=("Segoe UI Symbol", 26)).pack(side="left", padx=(0, 10))
-        tk.Label(brand, text=APP_NAME, bg=SURFACE, fg=TEXT,
-                 font=self.font(15, "bold")).pack(side="left")
+        brand.pack(side="left", padx=(28, 34), pady=14)
+        icon = tk.Label(
+            brand, text="◆", bg=SURFACE, fg=BLUE,
+            font=("Segoe UI Symbol", 26, "bold")
+        )
+        icon.pack(side="left", padx=(0, 12))
+        tk.Label(
+            brand, text=APP_NAME, bg=SURFACE, fg=TEXT,
+            font=self.font(19, "bold")
+        ).pack(side="left")
 
-        nav = tk.Frame(h, bg=SURFACE)
-        nav.pack(side="left", fill="y")
+        nav = tk.Frame(h, bg="#F8FAFC", highlightbackground=BORDER, highlightthickness=1)
+        nav.pack(side="left", pady=14)
         self.nav = {}
-        for key, label in (("lookup", "DUR 조회"), ("files", "기준파일 관리")):
-            box = tk.Frame(nav, bg=SURFACE, width=150, height=69, cursor="hand2")
+        for key, label, symbol in (
+            ("lookup", "DUR 조회", "⌕"),
+            ("files", "기준파일 관리", "▤"),
+        ):
+            box = tk.Frame(nav, bg="#F8FAFC", width=156, height=52, cursor="hand2")
             box.pack(side="left")
             box.pack_propagate(False)
-            lbl = tk.Label(box, text=label, bg=SURFACE, fg=TEXT_DARK, font=self.font(10))
-            lbl.pack(expand=True)
-            line = tk.Frame(box, bg=SURFACE, height=3)
+            inner = tk.Frame(box, bg="#F8FAFC")
+            inner.pack(expand=True)
+            s = tk.Label(inner, text=symbol, bg="#F8FAFC", fg="#65758B",
+                         font=("Segoe UI Symbol", 16))
+            s.pack(side="left", padx=(0, 8))
+            lbl = tk.Label(inner, text=label, bg="#F8FAFC", fg=TEXT_DARK,
+                           font=self.font(11, "bold"))
+            lbl.pack(side="left")
+            line = tk.Frame(box, bg="#F8FAFC", height=3)
             line.pack(side="bottom", fill="x")
-            for w in (box, lbl):
+            for w in (box, inner, s, lbl):
                 w.bind("<Button-1>", lambda e, k=key: self.navigate(k))
             self.nav[key] = (lbl, line)
 
-        right = tk.Frame(h, bg=SURFACE)
-        right.pack(side="right", padx=28, pady=10)
-        tk.Label(right, text="기준파일 최종 업데이트", bg=SURFACE, fg="#526D60",
-                 font=self.font(9)).pack(anchor="w")
-        self.header_update = tk.Label(right, text="● —", bg=SURFACE, fg=SAGE_DEEP,
-                                      font=self.font(10))
-        self.header_update.pack(anchor="w", pady=(2, 0))
+        right = tk.Frame(h, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
+        right.pack(side="right", padx=26, pady=12)
+        tk.Label(
+            right, text="●  기준파일 최종 업데이트",
+            bg=SURFACE, fg=SAGE_DEEP, font=self.font(9, "bold")
+        ).pack(anchor="w", padx=14, pady=(8, 1))
+        self.header_update = tk.Label(
+            right, text="—", bg=SURFACE, fg=TEXT_DARK, font=self.font(11, "bold")
+        )
+        self.header_update.pack(anchor="w", padx=14, pady=(0, 8))
 
     def navigate(self, page):
         for w in self.page_host.winfo_children():
@@ -607,72 +679,140 @@ class App(tk.Tk):
         else:
             self.show_lookup_page()
 
-    def make_button(self, parent, text, command, primary=False):
+    def make_button(self, parent, text, command, primary=False, danger=False):
+        if danger:
+            bg, fg, active, border = SURFACE, ERROR, "#FFF1F1", "#F3B4B4"
+        elif primary:
+            bg, fg, active, border = BLUE, "white", TERRA_DEEP, BLUE
+        else:
+            bg, fg, active, border = SURFACE, TEXT_DARK, "#F0F4F8", BORDER
         return tk.Button(
-            parent, text=text, command=command,
-            bg=TERRA if primary else SURFACE,
-            fg="white" if primary else TEXT_DARK,
-            activebackground=TERRA_DEEP if primary else "#F0F3F1",
-            activeforeground="white" if primary else TEXT_DARK,
-            relief="flat", bd=0, padx=14, pady=8,
-            font=self.font(9, "bold" if primary else "normal"),
-            cursor="hand2", highlightthickness=1,
-            highlightbackground=TERRA if primary else BORDER
+            parent,
+            text=text,
+            command=command,
+            bg=bg,
+            fg=fg,
+            activebackground=active,
+            activeforeground=fg,
+            relief="flat",
+            bd=0,
+            padx=16,
+            pady=10,
+            font=self.font(10, "bold" if (primary or danger) else "normal"),
+            cursor="hand2",
+            highlightthickness=1,
+            highlightbackground=border,
         )
+
+    def build_side_nav(self, parent, active):
+        side = tk.Frame(parent, bg=SURFACE, width=184, highlightbackground=BORDER, highlightthickness=1)
+        side.pack(side="left", fill="y", padx=(0, 12))
+        side.pack_propagate(False)
+
+        tk.Label(side, text="메뉴", bg=SURFACE, fg=MUTED, font=self.font(9, "bold")).pack(
+            anchor="w", padx=18, pady=(20, 8)
+        )
+
+        for key, label, symbol in (
+            ("lookup", "DUR 조회", "⌕"),
+            ("files", "기준파일 관리", "▤"),
+        ):
+            is_active = key == active
+            bg = BLUE_SOFT if is_active else SURFACE
+            fg = BLUE if is_active else TEXT_DARK
+            row = tk.Frame(side, bg=bg, height=54, cursor="hand2")
+            row.pack(fill="x", padx=10, pady=3)
+            row.pack_propagate(False)
+            tk.Label(row, text=symbol, bg=bg, fg=fg, font=("Segoe UI Symbol", 16)).pack(
+                side="left", padx=(12, 10)
+            )
+            lbl = tk.Label(row, text=label, bg=bg, fg=fg, font=self.font(11, "bold" if is_active else "normal"))
+            lbl.pack(side="left")
+            for w in (row, lbl):
+                w.bind("<Button-1>", lambda e, k=key: self.navigate(k))
+
+        tk.Frame(side, bg=BORDER, height=1).pack(fill="x", padx=14, pady=14)
+        tk.Label(
+            side, text="로컬 전용\\nExcel 원본은 PC 내부에서만 처리됩니다.",
+            bg=SURFACE, fg=MUTED, justify="left", font=self.font(9)
+        ).pack(anchor="w", padx=18)
+
+        return side
 
     def show_lookup_page(self):
         self.navigate_state("lookup")
         wrap = tk.Frame(self.page_host, bg=APP_BG)
-        wrap.pack(fill="both", expand=True, padx=16, pady=12)
+        wrap.pack(fill="both", expand=True, padx=16, pady=14)
 
-        top = tk.Frame(wrap, bg=APP_BG)
-        top.pack(fill="x", pady=(0, 8))
-        tk.Label(top, text="품목 일괄 검색", bg=APP_BG, fg=TEXT,
-                 font=self.font(13, "bold")).pack(side="left")
+        self.build_side_nav(wrap, "lookup")
 
-        search_panel = tk.Frame(wrap, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
-        search_panel.pack(fill="x", pady=(0, 10))
-        inner = tk.Frame(search_panel, bg=SURFACE)
-        inner.pack(fill="x", padx=14, pady=12)
+        work = tk.Frame(wrap, bg=APP_BG)
+        work.pack(side="left", fill="both", expand=True)
 
+        search_col = tk.Frame(work, bg=SURFACE, width=365, highlightbackground=BORDER, highlightthickness=1)
+        search_col.pack(side="left", fill="y", padx=(0, 12))
+        search_col.pack_propagate(False)
+
+        tk.Label(
+            search_col, text="품목 검색 (일괄 조회)", bg=SURFACE, fg=TEXT,
+            font=self.font(14, "bold")
+        ).pack(anchor="w", padx=18, pady=(20, 12))
+
+        search_box = tk.Frame(search_col, bg=SURFACE)
+        search_box.pack(fill="x", padx=16)
         self.query_var = tk.StringVar()
-        self.query = tk.Entry(inner, textvariable=self.query_var, bg=SURFACE, fg=TEXT_DARK,
-                              font=self.font(10), relief="flat", bd=0,
-                              highlightthickness=1, highlightbackground=BORDER,
-                              highlightcolor=SAGE)
-        self.query.pack(side="left", fill="x", expand=True, ipady=8)
+        self.query = tk.Entry(
+            search_box, textvariable=self.query_var, bg=SURFACE, fg=TEXT_DARK,
+            font=self.font(12), relief="flat", bd=0,
+            highlightthickness=1, highlightbackground="#AFC8EE", highlightcolor=BLUE
+        )
+        self.query.pack(fill="x", ipady=11)
         self.query.insert(0, PLACEHOLDER)
         self.query.bind("<FocusIn>", self.clear_placeholder)
         self.query.bind("<KeyRelease>", self.on_query_change)
         self.query.bind("<Down>", lambda e: self.focus_suggestions())
         self.query.bind("<Return>", lambda e: self.choose_first_suggestion())
 
-        self.make_button(inner, "선택 품목 조회", self.run_selected, primary=True).pack(side="left", padx=(10, 0))
-        self.make_button(inner, "선택 초기화", self.clear_selected).pack(side="left", padx=(8, 0))
-
-        self.suggest_frame = tk.Frame(search_panel, bg=SURFACE)
-        self.suggest_frame.pack(fill="x", padx=14, pady=(0, 8))
-        self.suggest_list = tk.Listbox(self.suggest_frame, height=0, bg=SURFACE, fg=TEXT_DARK,
-                                       font=self.font(9), relief="flat", bd=0,
-                                       highlightthickness=1, highlightbackground=BORDER,
-                                       selectbackground="#E8F1EC", selectforeground=TEXT_DARK,
-                                       activestyle="none")
+        self.suggest_frame = tk.Frame(search_col, bg=SURFACE)
+        self.suggest_frame.pack(fill="x", padx=16, pady=(4, 0))
+        self.suggest_list = tk.Listbox(
+            self.suggest_frame, height=0, bg=SURFACE, fg=TEXT_DARK,
+            font=self.font(10), relief="flat", bd=0,
+            highlightthickness=1, highlightbackground=BORDER,
+            selectbackground="#DCEBFF", selectforeground=BLUE,
+            activestyle="none"
+        )
         self.suggest_list.pack(fill="x")
         self.suggest_list.bind("<Double-Button-1>", lambda e: self.select_suggestion())
         self.suggest_list.bind("<Return>", lambda e: self.select_suggestion())
         self.suggest_list.pack_forget()
 
-        selected_panel = tk.Frame(wrap, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
-        selected_panel.pack(fill="x", pady=(0, 10))
-        tk.Label(selected_panel, text="선택 품목", bg=SURFACE, fg=TEXT_DARK,
-                 font=self.font(9, "bold")).pack(side="left", padx=12, pady=9)
-        self.selected_text = tk.Label(selected_panel, text="선택된 품목 없음", bg=SURFACE,
-                                      fg=MUTED, font=self.font(9), anchor="w")
-        self.selected_text.pack(side="left", fill="x", expand=True, padx=(0, 12))
+        sel_head = tk.Frame(search_col, bg=SURFACE)
+        sel_head.pack(fill="x", padx=16, pady=(18, 8))
+        tk.Label(sel_head, text="선택한 품목", bg=SURFACE, fg=TEXT,
+                 font=self.font(13, "bold")).pack(side="left")
+        self.selected_count = tk.Label(sel_head, text="(0)", bg=SURFACE, fg=MUTED,
+                                       font=self.font(11, "bold"))
+        self.selected_count.pack(side="left", padx=(4, 0))
+        self.make_button(sel_head, "전체 삭제", self.clear_selected, danger=True).pack(side="right")
 
-        body = tk.Frame(wrap, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
-        body.pack(fill="both", expand=True)
-        self.result_body = body
+        self.selected_list_host = tk.Frame(search_col, bg=SURFACE)
+        self.selected_list_host.pack(fill="both", expand=True, padx=16)
+
+        actions = tk.Frame(search_col, bg=SURFACE)
+        actions.pack(fill="x", padx=16, pady=16)
+        self.make_button(
+            actions, "⌕  선택 품목으로 조회", self.run_selected, primary=True
+        ).pack(fill="x")
+        self.make_button(
+            actions, "선택 품목 모두 삭제", self.clear_selected
+        ).pack(fill="x", pady=(8, 0))
+
+        result = tk.Frame(work, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
+        result.pack(side="left", fill="both", expand=True)
+        self.result_body = result
+
+        self.refresh_selected_panel()
         self.render_empty()
 
     def navigate_state(self, active):
@@ -729,25 +869,67 @@ class App(tk.Tk):
         product = self.suggest_list.get(sel[0])
         if product not in self.selected_products:
             self.selected_products.append(product)
-        self.refresh_selected_label()
+        self.refresh_selected_panel()
         self.query.delete(0, "end")
         self.query.focus_set()
         self.hide_suggestions()
 
-    def refresh_selected_label(self):
-        if not self.selected_products:
-            self.selected_text.config(text="선택된 품목 없음", fg=MUTED)
+    def refresh_selected_panel(self):
+        if not hasattr(self, "selected_list_host"):
             return
-        preview = " · ".join(self.selected_products[:5])
-        if len(self.selected_products) > 5:
-            preview += f"  외 {len(self.selected_products)-5}개"
-        self.selected_text.config(text=preview, fg=TEXT_DARK)
+        for w in self.selected_list_host.winfo_children():
+            w.destroy()
+        self.selected_count.config(text=f"({len(self.selected_products)})")
+        if not self.selected_products:
+            tk.Label(
+                self.selected_list_host,
+                text="검색 결과에서 품목을 선택하면\n이곳에 누적됩니다.",
+                bg=SURFACE, fg=MUTED, justify="center", font=self.font(10)
+            ).pack(expand=True, pady=28)
+            return
+
+        for product in self.selected_products:
+            active = product == self.current_product
+            bg = "#EAF4FF" if active else "#F8FAFC"
+            row = tk.Frame(
+                self.selected_list_host, bg=bg,
+                highlightbackground="#C8DCF7" if active else BORDER,
+                highlightthickness=1, height=58, cursor="hand2"
+            )
+            row.pack(fill="x", pady=4)
+            row.pack_propagate(False)
+            name = tk.Label(
+                row, text=product, bg=bg, fg=BLUE if active else TEXT_DARK,
+                font=self.font(10, "bold" if active else "normal"),
+                anchor="w"
+            )
+            name.pack(side="left", fill="x", expand=True, padx=(12, 6))
+            close = tk.Label(row, text="×", bg=bg, fg=MUTED, font=self.font(14, "bold"), cursor="hand2")
+            close.pack(side="right", padx=10)
+            name.bind("<Button-1>", lambda e, p=product: self.pick_product(p))
+            row.bind("<Button-1>", lambda e, p=product: self.pick_product(p))
+            close.bind("<Button-1>", lambda e, p=product: self.remove_selected_product(p))
+
+    def refresh_selected_label(self):
+        self.refresh_selected_panel()
+
+    def remove_selected_product(self, product):
+        if product in self.selected_products:
+            self.selected_products.remove(product)
+        self.results.pop(product, None)
+        if self.current_product == product:
+            self.current_product = self.selected_products[0] if self.selected_products else None
+        self.refresh_selected_panel()
+        if not self.selected_products:
+            self.render_empty()
+        elif self.results and self.current_product in self.results:
+            self.render_results()
 
     def clear_selected(self):
         self.selected_products.clear()
         self.results.clear()
         self.current_product = None
-        self.refresh_selected_label()
+        self.refresh_selected_panel()
         if hasattr(self, "result_body"):
             self.render_empty()
 
@@ -791,8 +973,19 @@ class App(tk.Tk):
     def render_empty(self):
         for w in self.result_body.winfo_children():
             w.destroy()
-        tk.Label(self.result_body, text="검색어를 입력하면 후보 품목이 검색창 바로 아래에 자동으로 표시됩니다.",
-                 bg=SURFACE, fg=MUTED, font=self.font(11)).pack(expand=True)
+        box = tk.Frame(self.result_body, bg=SURFACE)
+        box.pack(expand=True)
+        tk.Label(box, text="⌕", bg=SURFACE, fg="#A8B7CB",
+                 font=("Segoe UI Symbol", 34)).pack(pady=(0, 8))
+        tk.Label(
+            box, text="조회할 품목을 선택해 주세요",
+            bg=SURFACE, fg=TEXT, font=self.font(16, "bold")
+        ).pack()
+        tk.Label(
+            box,
+            text="품목명의 일부를 입력하면 검색창 아래에 후보가 자동으로 표시됩니다.",
+            bg=SURFACE, fg=MUTED, font=self.font(10)
+        ).pack(pady=(6, 0))
 
     def card_state(self, product, key):
         r = self.results.get(product, {})
@@ -816,62 +1009,95 @@ class App(tk.Tk):
         for w in self.result_body.winfo_children():
             w.destroy()
 
-        left = tk.Frame(self.result_body, bg=SURFACE, width=300)
-        left.pack(side="left", fill="y")
-        left.pack_propagate(False)
-        right = tk.Frame(self.result_body, bg=SURFACE)
-        right.pack(side="left", fill="both", expand=True)
-
-        tk.Label(left, text=f"검색 품목 ({len(self.selected_products)})", bg=SURFACE,
-                 fg=TEXT_DARK, font=self.font(10, "bold")).pack(anchor="w", padx=14, pady=(14, 8))
-
-        for p in self.selected_products:
-            row = tk.Frame(left, bg="#EFF7F2" if p == self.current_product else SURFACE,
-                           cursor="hand2", height=52)
-            row.pack(fill="x")
-            row.pack_propagate(False)
-            tk.Label(row, text="●" if p == self.current_product else "○",
-                     bg=row["bg"], fg=SAGE_DEEP if p == self.current_product else "#AAB1AE",
-                     font=self.font(9)).pack(side="left", padx=(12, 8))
-            name = tk.Label(row, text=p, bg=row["bg"], fg=TEXT_DARK,
-                            font=self.font(9, "bold" if p == self.current_product else "normal"),
-                            anchor="w")
-            name.pack(side="left", fill="x", expand=True)
-            for w in (row, name):
-                w.bind("<Button-1>", lambda e, prod=p: self.pick_product(prod))
-
         p = self.current_product
+        if not p:
+            self.render_empty()
+            return
+
+        self.refresh_selected_panel()
+
+        right = tk.Frame(self.result_body, bg=SURFACE)
+        right.pack(fill="both", expand=True, padx=16, pady=14)
+
         head = tk.Frame(right, bg=SURFACE)
-        head.pack(fill="x", padx=18, pady=(16, 8))
-        tk.Label(head, text=p, bg=SURFACE, fg=TEXT, font=self.font(16, "bold")).pack(anchor="w")
+        head.pack(fill="x", pady=(0, 10))
+        tk.Label(head, text="◆", bg=SURFACE, fg=SAGE,
+                 font=("Segoe UI Symbol", 20)).pack(side="left", padx=(0, 10))
+        tk.Label(
+            head, text=p, bg=SURFACE, fg=TEXT,
+            font=self.font(18, "bold")
+        ).pack(side="left")
+
+        active_parts = []
+        for key, label in DUR_CARDS:
+            state, sub, active = self.card_state(p, key)
+            if active:
+                active_parts.append(f"{label} {sub or ''}".strip())
+        tk.Label(
+            right,
+            text=(f"{len(active_parts)}개 DUR 해당  ·  " + "  ·  ".join(active_parts[:4]))
+                 if active_parts else "7개 관리항목 모두 해당 없음",
+            bg=SURFACE, fg=TEXT_DARK, font=self.font(11, "bold")
+        ).pack(anchor="w", pady=(0, 12))
 
         cards = tk.Frame(right, bg=SURFACE)
-        cards.pack(fill="x", padx=18)
+        cards.pack(fill="x")
+
+        palette = {
+            "combo": (RED, RED_SOFT),
+            "age": (ORANGE, ORANGE_SOFT),
+            "preg": (RED, "#FFF2F4"),
+            "lact": (PURPLE, PURPLE_SOFT),
+            "dup": (GREEN, GREEN_SOFT),
+            "tele": (BLUE, BLUE_SOFT),
+            "cost": (SAGE_DEEP, SAGE_SOFT),
+        }
+
         for i, (key, label) in enumerate(DUR_CARDS):
             state, sub, active = self.card_state(p, key)
-            bg = SAGE_SOFT if active else "#FAFBFA"
-            border = SAGE if active else BORDER
-            c = tk.Frame(cards, bg=bg, highlightbackground=border, highlightthickness=1,
-                         width=205, height=82, cursor="hand2")
-            c.grid(row=i//4, column=i%4, sticky="nsew", padx=4, pady=4)
+            accent, soft = palette[key]
+            bg = soft if active else "#FBFCFE"
+            border = accent if active else BORDER
+            c = tk.Frame(
+                cards, bg=bg, highlightbackground=border, highlightthickness=1,
+                height=106, cursor="hand2"
+            )
+            c.grid(row=i // 3, column=i % 3, sticky="nsew", padx=5, pady=5)
             c.grid_propagate(False)
-            tk.Label(c, text=label, bg=bg, fg=TEXT_DARK, font=self.font(9, "bold")).pack(anchor="w", padx=12, pady=(10, 4))
-            text = f"● {sub or state}" if active else "○ 해당 없음"
-            color = TERRA_DEEP if key == "preg" and active else (SAGE_DEEP if active else MUTED)
-            tk.Label(c, text=text, bg=bg, fg=color,
-                     font=self.font(11, "bold" if active else "normal")).pack(anchor="w", padx=12)
-            for w in (c,):
-                w.bind("<Button-1>", lambda e, k=key: self.render_detail(k))
-        for col in range(4):
+
+            top = tk.Frame(c, bg=bg)
+            top.pack(fill="x", padx=14, pady=(12, 5))
+            tk.Label(top, text=label, bg=bg, fg=accent if active else TEXT_DARK,
+                     font=self.font(11, "bold")).pack(side="left")
+            tk.Label(top, text="›" if active else "–", bg=bg,
+                     fg=accent if active else MUTED, font=self.font(16, "bold")).pack(side="right")
+
+            main_text = sub or state if active else "해당 없음"
+            tk.Label(
+                c,
+                text=("●  " + main_text) if active else "○  해당 없음",
+                bg=bg, fg=accent if active else MUTED,
+                font=self.font(13, "bold" if active else "normal")
+            ).pack(anchor="w", padx=14, pady=(4, 0))
+
+            c.bind("<Button-1>", lambda e, k=key: self.render_detail(k))
+
+        for col in range(3):
             cards.columnconfigure(col, weight=1)
 
+        self.detail_tabs = tk.Frame(right, bg=SURFACE)
+        self.detail_tabs.pack(fill="x", pady=(12, 0))
+
         self.detail_host = tk.Frame(right, bg=SURFACE)
-        self.detail_host.pack(fill="both", expand=True, padx=18, pady=(10, 16))
-        self.render_detail("combo")
+        self.detail_host.pack(fill="both", expand=True, pady=(0, 4))
+
+        self.render_detail(next((k for k, _ in DUR_CARDS if self.card_state(p, k)[2]), "combo"))
 
     def pick_product(self, p):
         self.current_product = p
-        self.render_results()
+        self.refresh_selected_panel()
+        if p in self.results:
+            self.render_results()
 
     def render_detail(self, key):
         for w in self.detail_host.winfo_children():
@@ -882,8 +1108,36 @@ class App(tk.Tk):
         hits = (r.get("combo_paid", []) + r.get("combo_unpaid", [])) if key == "combo" else r.get(key, [])
 
         title = dict(DUR_CARDS)[key]
+
+        if hasattr(self, "detail_tabs"):
+            for w in self.detail_tabs.winfo_children():
+                w.destroy()
+            for tab_key, tab_label in DUR_CARDS:
+                st, sub, active = self.card_state(p, tab_key)
+                if not active:
+                    continue
+                selected = tab_key == key
+                btn = tk.Button(
+                    self.detail_tabs,
+                    text=f"{tab_label} 상세" + (f" ({sub})" if sub and sub.endswith("건") else ""),
+                    command=lambda k=tab_key: self.render_detail(k),
+                    bg=SURFACE,
+                    fg=(BLUE if selected else TEXT_DARK),
+                    activebackground=SURFACE,
+                    activeforeground=BLUE,
+                    relief="flat",
+                    bd=0,
+                    font=self.font(10, "bold" if selected else "normal"),
+                    padx=14,
+                    pady=9,
+                    cursor="hand2",
+                    highlightthickness=0,
+                )
+                btn.pack(side="left")
+            tk.Frame(self.detail_tabs, bg=BORDER, height=1).pack(fill="x", side="bottom")
+
         tk.Label(self.detail_host, text=f"{title} 상세정보", bg=SURFACE, fg=TEXT_DARK,
-                 font=self.font(10, "bold")).pack(anchor="w", pady=(2, 8))
+                 font=self.font(13, "bold")).pack(anchor="w", pady=(12, 8))
 
         if not hits:
             tk.Label(self.detail_host, text="해당 없음", bg=SURFACE, fg=MUTED,
@@ -953,31 +1207,55 @@ class App(tk.Tk):
     def show_files_page(self):
         self.navigate_state("files")
         wrap = tk.Frame(self.page_host, bg=APP_BG)
-        wrap.pack(fill="both", expand=True, padx=20, pady=16)
+        wrap.pack(fill="both", expand=True, padx=16, pady=14)
 
-        head = tk.Frame(wrap, bg=APP_BG)
-        head.pack(fill="x", pady=(0,10))
-        tk.Label(head, text="기준파일 관리", bg=APP_BG, fg=TEXT,
-                 font=self.font(14, "bold")).pack(side="left")
-        self.make_button(head, "8개 파일 일괄 등록", self.choose_files, primary=True).pack(side="right")
-        self.make_button(head, "다시 인덱싱", self.reindex_all).pack(side="right", padx=(0,8))
+        self.build_side_nav(wrap, "files")
 
-        panel = tk.Frame(wrap, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
+        main = tk.Frame(wrap, bg=APP_BG)
+        main.pack(side="left", fill="both", expand=True)
+
+        head = tk.Frame(main, bg=APP_BG)
+        head.pack(fill="x", pady=(0, 12))
+        title_box = tk.Frame(head, bg=APP_BG)
+        title_box.pack(side="left")
+        tk.Label(title_box, text="기준파일 관리", bg=APP_BG, fg=TEXT,
+                 font=self.font(18, "bold")).pack(anchor="w")
+        tk.Label(
+            title_box,
+            text="새 파일을 등록하거나 기존 인덱스를 완전히 삭제할 수 있습니다.",
+            bg=APP_BG, fg=MUTED, font=self.font(10)
+        ).pack(anchor="w", pady=(4, 0))
+
+        self.make_button(head, "전체 기준파일 삭제", self.delete_all_files, danger=True).pack(side="right")
+        self.make_button(head, "파일 일괄 등록", self.choose_files, primary=True).pack(side="right", padx=(0, 8))
+        self.make_button(head, "다시 인덱싱", self.reindex_all).pack(side="right", padx=(0, 8))
+
+        panel = tk.Frame(main, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
         panel.pack(fill="both", expand=True)
-        for col, label in enumerate(("파일 종류","상태","마지막 등록","등록 파일")):
-            tk.Label(panel, text=label, bg="#F8FAF8", fg="#52626D",
-                     font=self.font(9,"bold"), anchor="w").grid(row=0,column=col,sticky="nsew",padx=12,pady=9)
+
+        headers = ("파일 종류", "상태", "마지막 등록", "등록 파일", "")
+        widths = (22, 15, 20, 1, 12)
+        for col, label in enumerate(headers):
+            tk.Label(
+                panel, text=label, bg="#F4F7FB", fg="#52626D",
+                font=self.font(10, "bold"), anchor="w"
+            ).grid(row=0, column=col, sticky="nsew", padx=14, pady=12)
         panel.columnconfigure(3, weight=1)
+
         self.file_rows = {}
-        for i,(key,label) in enumerate(CATEGORIES,1):
-            bg = SURFACE if i%2 else "#FBFCFB"
-            a=tk.Label(panel,text=label,bg=bg,fg=TEXT_DARK,font=self.font(9),anchor="w")
-            b=tk.Label(panel,text="미등록",bg=bg,fg=MUTED,font=self.font(9),anchor="w")
-            c=tk.Label(panel,text="—",bg=bg,fg=MUTED,font=self.font(9),anchor="w")
-            d=tk.Label(panel,text="—",bg=bg,fg=MUTED,font=self.font(9),anchor="w")
-            for j,w in enumerate((a,b,c,d)):
-                w.grid(row=i,column=j,sticky="nsew",padx=12,pady=9)
-            self.file_rows[key]=(b,c,d)
+        for i, (key, label) in enumerate(CATEGORIES, 1):
+            bg = SURFACE if i % 2 else "#FBFCFE"
+            a = tk.Label(panel, text=label, bg=bg, fg=TEXT_DARK, font=self.font(11, "bold"), anchor="w")
+            b = tk.Label(panel, text="미등록", bg=bg, fg=MUTED, font=self.font(10), anchor="w")
+            c = tk.Label(panel, text="—", bg=bg, fg=MUTED, font=self.font(10), anchor="w")
+            d = tk.Label(panel, text="—", bg=bg, fg=MUTED, font=self.font(10), anchor="w")
+            e = self.make_button(panel, "삭제", lambda k=key: self.delete_category_file(k), danger=True)
+
+            for j, w in enumerate((a, b, c, d)):
+                w.grid(row=i, column=j, sticky="nsew", padx=14, pady=12)
+            e.grid(row=i, column=4, sticky="e", padx=12, pady=7)
+            self.file_rows[key] = (b, c, d, e)
+
         self.refresh_status()
 
     def classify_file(self, path):
@@ -1025,8 +1303,16 @@ class App(tk.Tk):
         items = []
         self.cfg.setdefault("_uploaded_at", {})
         for cat,p in mapped.items():
+            old_path = self.cfg.get(cat)
             dest = files_dir / f"{cat}__{p.name}"
             shutil.copy2(p,dest)
+            if old_path and old_path != str(dest):
+                try:
+                    old = Path(old_path)
+                    if old.exists() and old.parent == files_dir:
+                        old.unlink()
+                except Exception:
+                    pass
             self.cfg[cat]=str(dest)
             self.cfg["_uploaded_at"][cat]=datetime.now().isoformat(timespec="minutes")
             items.append((cat,dest))
@@ -1067,6 +1353,57 @@ class App(tk.Tk):
             self.after(0,done)
         threading.Thread(target=worker,daemon=True).start()
 
+    def delete_category_file(self, category, ask=True):
+        label = dict(CATEGORIES)[category]
+        path = self.cfg.get(category)
+
+        if ask and not messagebox.askyesno(
+            "기준파일 삭제",
+            f"'{label}' 기준파일과 검색 인덱스를 완전히 삭제할까요?\n\n"
+            "삭제 후 다른 Excel 파일을 다시 등록할 수 있습니다."
+        ):
+            return
+
+        try:
+            self.idx.delete_category(category)
+        except Exception as e:
+            messagebox.showerror("인덱스 삭제 실패", str(e))
+            return
+
+        if isinstance(path, str):
+            try:
+                p = Path(path)
+                if p.exists() and p.parent == (ROOT_DIR / "files"):
+                    p.unlink()
+            except Exception:
+                pass
+
+        self.cfg.pop(category, None)
+        times = self.cfg.get("_uploaded_at", {})
+        times.pop(category, None)
+
+        if category in ("age", "tele"):
+            self.cfg.pop("_index_migration_v160_age_tele", None)
+            self.cfg.pop("_v151_auto_reindex_done", None)
+
+        self.save_cfg()
+        self.refresh_status()
+
+    def delete_all_files(self):
+        existing = [k for k, _ in CATEGORIES if self.cfg.get(k)]
+        if not existing:
+            messagebox.showinfo("삭제할 파일 없음", "등록된 기준파일이 없습니다.")
+            return
+        if not messagebox.askyesno(
+            "전체 기준파일 삭제",
+            "등록된 모든 기준파일과 모든 검색 인덱스를 완전히 삭제할까요?\n\n"
+            "원본으로 등록했던 외부 Excel 파일은 삭제하지 않고, 프로그램 내부 복사본과 인덱스만 삭제합니다."
+        ):
+            return
+        for category in existing:
+            self.delete_category_file(category, ask=False)
+        messagebox.showinfo("삭제 완료", "등록된 기준파일과 검색 인덱스를 모두 삭제했습니다.")
+
     def reindex_all(self):
         items=[]
         for k,_ in CATEGORIES:
@@ -1085,10 +1422,12 @@ class App(tk.Tk):
             sts={}
         times=self.cfg.get("_uploaded_at",{})
         latest=max(times.values()) if times else ""
-        self.header_update.config(text=("● "+latest.replace("T"," ")[:16]) if latest else "● —")
+        self.header_update.config(text=(latest.replace("T"," ")[:16]) if latest else "—")
         if hasattr(self,"file_rows"):
             for key,_ in CATEGORIES:
-                status_lbl,date_lbl,file_lbl=self.file_rows[key]
+                row_items=self.file_rows[key]
+                status_lbl,date_lbl,file_lbl=row_items[:3]
+                delete_btn=row_items[3] if len(row_items) > 3 else None
                 v=sts.get(key)
                 stamp=times.get(key)
                 date_lbl.config(text=stamp.replace("T"," ")[:16] if stamp else "—")
@@ -1100,10 +1439,12 @@ class App(tk.Tk):
                     status_lbl.config(text="● 오류",fg=ERROR)
                 else:
                     status_lbl.config(text="● 미등록",fg=MUTED)
+                if delete_btn is not None:
+                    delete_btn.config(state=("normal" if path else "disabled"))
 
     def auto_reindex_v151(self):
         # v1.5.2 uses a new migration key so an old v1.5.1 completion flag cannot suppress repair.
-        migration_key = "_index_migration_v152_age_tele"
+        migration_key = "_index_migration_v160_age_tele"
         if self.cfg.get(migration_key):
             return
 
