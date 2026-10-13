@@ -263,6 +263,11 @@ class Indexer:
                 c.execute("CREATE INDEX IF NOT EXISTS ix_records_cat_name ON records(category,product_norm)")
                 c.execute("CREATE INDEX IF NOT EXISTS ix_records_cat_core ON records(category,core_norm)")
                 c.execute("CREATE INDEX IF NOT EXISTS ix_records_cat_code ON records(category,product_code)")
+                c.execute("CREATE TABLE IF NOT EXISTS names(category TEXT, product TEXT, product_norm TEXT)")
+                c.execute("CREATE INDEX IF NOT EXISTS ix_names_cat ON names(category)")
+                if c.execute("SELECT 1 FROM names LIMIT 1").fetchone() is None \
+                        and c.execute("SELECT 1 FROM records LIMIT 1").fetchone() is not None:
+                    c.execute("INSERT INTO names SELECT DISTINCT category,product,product_norm FROM records")
                 c.execute(
                     "CREATE TABLE IF NOT EXISTS status("
                     "category TEXT PRIMARY KEY, ok INTEGER, message TEXT, filename TEXT, "
@@ -272,6 +277,7 @@ class Indexer:
 
     def clear_category(self, c, category):
         c.execute("DELETE FROM records WHERE category=?", (category,))
+        c.execute("DELETE FROM names WHERE category=?", (category,))
         c.execute("DELETE FROM status WHERE category=?", (category,))
 
     def index_file(self, category, path, progress=None):
@@ -345,6 +351,10 @@ class Indexer:
                             total += len(batch)
 
                     c.execute(
+                        "INSERT INTO names SELECT DISTINCT category,product,product_norm FROM records WHERE category=?",
+                        (category,),
+                    )
+                    c.execute(
                         "INSERT OR REPLACE INTO status VALUES(?,?,?,?,?,?,?)",
                         (category, 1, "정상", path.name, datetime.now().isoformat(timespec="seconds"), sheets, total),
                     )
@@ -363,6 +373,20 @@ class Indexer:
             except Exception:
                 pass
             return False, str(e)
+
+    def migrate_norm_v161(self):
+        """그람→그램 표기 통일을 기존 DB에 직접 반영하고 후보 테이블을 다시 만든다(엑셀 재인덱싱 불필요)."""
+        self.init()
+        def _work():
+            with self.lock, self.conn() as c:
+                for col in ("product_norm", "core_norm"):
+                    c.execute(
+                        f"UPDATE records SET {col}=replace(replace({col},'밀리그람','mg'),'그람','그램') "
+                        f"WHERE {col} LIKE '%그람%'"
+                    )
+                c.execute("DELETE FROM names")
+                c.execute("INSERT INTO names SELECT DISTINCT category,product,product_norm FROM records")
+        return self.with_retry(_work)
 
     def delete_category(self, category):
         """Remove one category from the local search index."""
@@ -388,12 +412,12 @@ class Indexer:
         def _work():
             with self.conn() as c:
                 rows = c.execute(
-                    "SELECT product, COUNT(*) n FROM records "
+                    "SELECT product, MIN(CASE WHEN product_norm LIKE ? THEN 0 ELSE 1 END) rk FROM names "
                     "WHERE product_norm LIKE ? "
                     "GROUP BY product "
-                    "ORDER BY CASE WHEN product_norm LIKE ? THEN 0 ELSE 1 END, length(product), product "
+                    "ORDER BY rk, length(product), product "
                     "LIMIT ?",
-                    (f"%{nq}%", f"{nq}%", limit),
+                    (f"{nq}%", f"%{nq}%", limit),
                 ).fetchall()
             return [r[0] for r in rows]
         return self.with_retry(_work)
@@ -830,6 +854,13 @@ class App(tk.Tk):
     def on_query_change(self, event=None):
         if event and event.keysym in ("Up", "Down", "Return", "Escape"):
             return
+        job = getattr(self, "_sugg_job", None)
+        if job:
+            self.after_cancel(job)
+        self._sugg_job = self.after(150, self.update_suggestions)
+
+    def update_suggestions(self):
+        self._sugg_job = None
         q = self.query.get().strip()
         if not q or q == PLACEHOLDER:
             self.hide_suggestions()
@@ -1444,31 +1475,21 @@ class App(tk.Tk):
                     delete_btn.config(state=("normal" if path else "disabled"))
 
     def auto_reindex_v151(self):
-        # v1.5.2 uses a new migration key so an old v1.5.1 completion flag cannot suppress repair.
+        # v1.6.1: 표기 통일(그람→그램)과 후보 전용 테이블을 DB 안에서 직접 처리한다.
         migration_key = "_index_migration_v161_norm_all"
         if self.cfg.get(migration_key):
             return
 
-        items=[]
-        for cat,_ in CATEGORIES:
-            p=self.cfg.get(cat)
-            if isinstance(p,str) and Path(p).exists():
-                items.append((cat,Path(p)))
-
-        if not items:
-            return
-
         def worker():
-            all_ok = True
-            for cat,path in items:
-                ok, _ = self.idx.index_file(cat,path)
-                all_ok = all_ok and ok
-            if all_ok:
+            try:
+                self.idx.migrate_norm_v161()
                 self.cfg[migration_key] = datetime.now().isoformat(timespec="seconds")
                 self.save_cfg()
-            self.after(0,self.refresh_status)
+            except Exception:
+                pass
+            self.after(0, self.refresh_status)
 
-        threading.Thread(target=worker,daemon=True).start()
+        threading.Thread(target=worker, daemon=True).start()
 
 
 if __name__ == "__main__":
