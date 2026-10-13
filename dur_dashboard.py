@@ -91,6 +91,7 @@ def sval(v):
 def norm(v):
     s = sval(v).lower()
     s = re.sub(r"\s+", "", s)
+    s = s.replace("그람", "그램")  # 일부 목록의 구표기(밀리그람) 통일
     s = s.replace("㎖", "ml").replace("밀리리터", "ml").replace("밀리그램", "mg")
     s = re.sub(r"[()\[\]{}·,._\-/]", "", s)
     return s
@@ -1383,7 +1384,7 @@ class App(tk.Tk):
         times.pop(category, None)
 
         if category in ("age", "tele"):
-            self.cfg.pop("_index_migration_v160_age_tele", None)
+            self.cfg.pop("_index_migration_v161_norm_all", None)
             self.cfg.pop("_v151_auto_reindex_done", None)
 
         self.save_cfg()
@@ -1444,12 +1445,12 @@ class App(tk.Tk):
 
     def auto_reindex_v151(self):
         # v1.5.2 uses a new migration key so an old v1.5.1 completion flag cannot suppress repair.
-        migration_key = "_index_migration_v160_age_tele"
+        migration_key = "_index_migration_v161_norm_all"
         if self.cfg.get(migration_key):
             return
 
         items=[]
-        for cat in ("age","tele"):
+        for cat,_ in CATEGORIES:
             p=self.cfg.get(cat)
             if isinstance(p,str) and Path(p).exists():
                 items.append((cat,Path(p)))
