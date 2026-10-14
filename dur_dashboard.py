@@ -66,6 +66,7 @@ GREEN = "#0F9D78"
 GREEN_SOFT = "#ECFAF4"
 
 PLACEHOLDER = "품목명의 일부를 입력하세요"
+DETAIL_FONT = 12  # 상세정보 본문 글자 크기
 
 
 def app_dir() -> Path:
@@ -608,7 +609,7 @@ class App(tk.Tk):
         style.theme_use("clam")
         style.configure(
             "Compact.Treeview",
-            font=self.font(10),
+            font=self.font(11),
             rowheight=36,
             background=SURFACE,
             fieldbackground=SURFACE,
@@ -1131,6 +1132,69 @@ class App(tk.Tk):
         if p in self.results:
             self.render_results()
 
+    # ---- 상세정보 선택·복사 지원 ----
+    def copy_to_clipboard(self, text, btn=None):
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.update_idletasks()
+        if btn is not None:
+            old = btn.cget("text")
+            btn.config(text="복사됨 ✓")
+            self.after(1200, lambda: btn.winfo_exists() and btn.config(text=old))
+
+    def make_readonly_text(self, parent, height=8, bg=SURFACE):
+        """드래그로 블럭 선택·Ctrl+C 복사는 되고 편집은 막은 Text. (holder, text) 반환."""
+        holder = tk.Frame(parent, bg=bg, highlightbackground=BORDER, highlightthickness=1)
+        t = tk.Text(
+            holder, height=height, bg=bg, fg=TEXT_DARK, font=self.font(DETAIL_FONT),
+            relief="flat", bd=0, padx=14, pady=10, wrap="word", cursor="xterm",
+            selectbackground="#BBD8FF", selectforeground=TEXT_DARK,
+            inactiveselectbackground="#BBD8FF", insertwidth=0, highlightthickness=0,
+        )
+        sb = ttk.Scrollbar(holder, orient="vertical", command=t.yview)
+        t.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        t.pack(side="left", fill="both", expand=True)
+
+        move_keys = {"Left", "Right", "Up", "Down", "Home", "End", "Prior", "Next",
+                     "Shift_L", "Shift_R", "Control_L", "Control_R"}
+
+        def on_key(e):
+            if e.keysym in move_keys:
+                return None
+            return "break"  # 입력·삭제·붙여넣기 차단
+
+        def select_all(_=None):
+            t.tag_add("sel", "1.0", "end-1c")
+            return "break"
+
+        def copy_sel(_=None):
+            t.event_generate("<<Copy>>")
+            return "break"
+
+        t.bind("<Key>", on_key)
+        for k in ("a", "A"):
+            t.bind(f"<Control-{k}>", select_all)
+        for k in ("c", "C"):
+            t.bind(f"<Control-{k}>", copy_sel)
+        t.bind("<<Paste>>", lambda e: "break")
+        t.bind("<<Cut>>", lambda e: "break")
+        t.bind("<Button-1>", lambda e: t.focus_set(), add="+")
+
+        menu = tk.Menu(t, tearoff=0)
+        menu.add_command(label="복사", command=lambda: t.event_generate("<<Copy>>"))
+        menu.add_command(label="전체 선택", command=select_all)
+
+        def popup(e):
+            t.focus_set()
+            try:
+                menu.tk_popup(e.x_root, e.y_root)
+            finally:
+                menu.grab_release()
+
+        t.bind("<Button-3>", popup)
+        return holder, t
+
     def render_detail(self, key):
         for w in self.detail_host.winfo_children():
             w.destroy()
@@ -1168,25 +1232,41 @@ class App(tk.Tk):
                 btn.pack(side="left")
             tk.Frame(self.detail_tabs, bg=BORDER, height=1).pack(fill="x", side="bottom")
 
-        tk.Label(self.detail_host, text=f"{title} 상세정보", bg=SURFACE, fg=TEXT_DARK,
-                 font=self.font(13, "bold")).pack(anchor="w", pady=(12, 8))
+        head = tk.Frame(self.detail_host, bg=SURFACE)
+        head.pack(fill="x", pady=(12, 8))
+        tk.Label(head, text=f"{title} 상세정보", bg=SURFACE, fg=TEXT_DARK,
+                 font=self.font(13, "bold")).pack(side="left")
+
+        def small_button(parent, text, command):
+            b = self.make_button(parent, text, command)
+            b.config(padx=12, pady=5)
+            return b
 
         if not hits:
             tk.Label(self.detail_host, text="해당 없음", bg=SURFACE, fg=MUTED,
-                     font=self.font(10)).pack(anchor="w")
+                     font=self.font(DETAIL_FONT)).pack(anchor="w")
             return
 
         if key == "combo":
             cols = ("상대 품목", "상대 성분", "급여구분", "고시번호", "고시일자")
-            tree = ttk.Treeview(self.detail_host, columns=cols, show="headings",
-                                style="Compact.Treeview", height=8)
+            pw = ttk.PanedWindow(self.detail_host, orient="vertical")
+            pw.pack(fill="both", expand=True)
+            top = tk.Frame(pw, bg=SURFACE)
+            bottom = tk.Frame(pw, bg=SURFACE)
+            pw.add(top, weight=3)
+            pw.add(bottom, weight=2)
+
+            tree = ttk.Treeview(top, columns=cols, show="headings",
+                                style="Compact.Treeview", height=4, selectmode="extended")
+            tsb = ttk.Scrollbar(top, orient="vertical", command=tree.yview)
+            tree.configure(yscrollcommand=tsb.set)
             for c in cols:
-                tree.heading(c, text=c)
-            tree.column("상대 품목", width=320)
-            tree.column("상대 성분", width=220)
-            tree.column("급여구분", width=90, anchor="center")
-            tree.column("고시번호", width=120, anchor="center")
-            tree.column("고시일자", width=120, anchor="center")
+                tree.heading(c, text=c, command=lambda c=c: sort_by(c))
+            tree.column("상대 품목", width=300, minwidth=180)
+            tree.column("상대 성분", width=200, minwidth=120)
+            tree.column("급여구분", width=80, minwidth=70, anchor="center")
+            tree.column("고시번호", width=110, minwidth=90, anchor="center")
+            tree.column("고시일자", width=110, minwidth=90, anchor="center")
             rows_data = []
             for h in hits:
                 d = h["data"]
@@ -1196,24 +1276,98 @@ class App(tk.Tk):
                 else:
                     other_p, other_i, pay = d.get("제품명A",""), d.get("성분명A",""), d.get("급여여부A","")
                 vals = (other_p, other_i, pay, d.get("고시번호",""), d.get("고시일자",""))
-                tree.insert("", "end", values=vals)
+                tree.insert("", "end", iid=str(len(rows_data)), values=vals)
                 rows_data.append(d)
-            tree.pack(fill="x")
+            tsb.pack(side="right", fill="y")
+            tree.pack(side="left", fill="both", expand=True)
 
-            detail = tk.Text(self.detail_host, height=5, bg=GRAY_SOFT, fg=TEXT_DARK,
-                             font=self.font(9), relief="flat", bd=0, padx=10, pady=8,
-                             wrap="word")
-            detail.pack(fill="x", pady=(8,0))
-            def show_sel(_=None):
+            # 열 제목 클릭: 오름차순 → 내림차순 → 원래 순서
+            sort_state = {"col": None, "dir": 0}
+
+            def sort_key(v):
+                v = str(v).strip()
+                if not v:
+                    return None  # 빈 값은 항상 맨 아래
+                return (0, int(v)) if v.isdigit() else (1, v.casefold())
+
+            def sort_by(col):
+                if sort_state["col"] == col:
+                    sort_state["dir"] = {1: -1, -1: 0, 0: 1}[sort_state["dir"]]
+                else:
+                    sort_state["col"], sort_state["dir"] = col, 1
+                direction = sort_state["dir"]
+                base = sorted(tree.get_children(), key=int)  # 동률일 때 원래 순서 유지
+                if direction == 0:
+                    ordered = base
+                else:
+                    keyed = [(sort_key(tree.set(i, col)), i) for i in base]
+                    full = sorted([x for x in keyed if x[0] is not None],
+                                  key=lambda x: x[0], reverse=(direction == -1))
+                    ordered = [i for _, i in full] + [i for k, i in keyed if k is None]
+                for pos, i in enumerate(ordered):
+                    tree.move(i, "", pos)
+                for c in cols:
+                    mark = (" ▲" if direction == 1 else " ▼") if (c == col and direction != 0) else ""
+                    tree.heading(c, text=c + mark)
                 sel = tree.selection()
+                if sel:
+                    tree.see(sel[0])
+
+            def rows_text(items, with_header=False):
+                lines = ["\t".join(cols)] if with_header else []
+                for i in items:
+                    lines.append("\t".join(str(x) for x in tree.item(i, "values")))
+                return "\n".join(lines)
+
+            def copy_selected(_=None):
+                items = sorted(tree.selection(), key=tree.index) or list(tree.get_children())
+                self.copy_to_clipboard(rows_text(items))
+                return "break"
+
+            def copy_all(btn):
+                self.copy_to_clipboard(rows_text(tree.get_children(), with_header=True), btn)
+
+            all_btn = small_button(head, "표 전체 복사", lambda: copy_all(all_btn))
+            all_btn.pack(side="right")
+            tk.Label(head, text="  열 제목을 클릭하면 정렬됩니다", bg=SURFACE, fg=MUTED,
+                     font=self.font(10)).pack(side="left")
+            tree.bind("<Control-c>", copy_selected)
+            tree.bind("<Control-C>", copy_selected)
+            tree.bind("<Control-a>", lambda e: (tree.selection_set(tree.get_children()), "break")[1])
+            tmenu = tk.Menu(tree, tearoff=0)
+            tmenu.add_command(label="선택 행 복사", command=copy_selected)
+            tmenu.add_command(label="전체 행 복사 (머리글 포함)",
+                              command=lambda: self.copy_to_clipboard(rows_text(tree.get_children(), True)))
+
+            def tpopup(e):
+                row = tree.identify_row(e.y)
+                if row and row not in tree.selection():
+                    tree.selection_set(row)
+                try:
+                    tmenu.tk_popup(e.x_root, e.y_root)
+                finally:
+                    tmenu.grab_release()
+
+            tree.bind("<Button-3>", tpopup)
+
+            sub_head = tk.Frame(bottom, bg=SURFACE)
+            sub_head.pack(fill="x", pady=(10, 4))
+            tk.Label(sub_head, text="상세내용 (드래그해서 선택 · Ctrl+C로 복사 · 위 표와의 경계선을 끌어 크기 조절)",
+                     bg=SURFACE, fg=MUTED, font=self.font(10)).pack(side="left")
+
+            holder, detail = self.make_readonly_text(bottom, height=4, bg=GRAY_SOFT)
+            holder.pack(fill="both", expand=True)
+            cp_btn = small_button(sub_head, "상세내용 복사", lambda: self.copy_to_clipboard(
+                detail.get("1.0", "end-1c"), cp_btn))
+            cp_btn.pack(side="right")
+
+            def show_sel(_=None):
+                sel = sorted(tree.selection(), key=tree.index)
                 if not sel:
                     return
-                idx = tree.index(sel[0])
-                d = rows_data[idx]
-                detail.config(state="normal")
-                detail.delete("1.0","end")
-                detail.insert("1.0", d.get("상세정보","") or "상세정보 없음")
-                detail.config(state="disabled")
+                d = rows_data[int(sel[0])]
+                detail.delete("1.0", "end")
+                detail.insert("1.0", d.get("상세정보", "") or "상세정보 없음")
             tree.bind("<<TreeviewSelect>>", show_sel)
             if tree.get_children():
                 tree.selection_set(tree.get_children()[0])
@@ -1222,19 +1376,28 @@ class App(tk.Tk):
 
         data = hits[0]["data"]
         hidden = ("성분코드","제품코드","약품코드","일반명코드","주성분코드","업체명","원본","시트")
-        box = tk.Frame(self.detail_host, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
-        box.pack(fill="both", expand=True)
-        rr = 0
+        fields = []
         for k, v in data.items():
-            if not sval(v) or any(h in str(k) for h in hidden):
-                continue
-            tk.Label(box, text=str(k), bg=SURFACE, fg=MUTED,
-                     font=self.font(9), anchor="w").grid(row=rr, column=0, sticky="nw", padx=12, pady=6)
-            tk.Label(box, text=sval(v), bg=SURFACE, fg=TEXT_DARK,
-                     font=self.font(9), anchor="w", justify="left",
-                     wraplength=760).grid(row=rr, column=1, sticky="nw", padx=(8,12), pady=6)
-            rr += 1
-        box.columnconfigure(1, weight=1)
+            kk = re.sub(r"\s+", "", str(k))  # 머리글 안의 줄바꿈/공백 제거 (예: "일반명\n코드")
+            if sval(v) and not any(h in kk for h in hidden):
+                fields.append((kk, sval(v)))
+
+        holder, txt = self.make_readonly_text(self.detail_host, height=8, bg=SURFACE)
+        holder.pack(fill="both", expand=True)
+        key_font = tkfont.Font(font=self.font(DETAIL_FONT, "bold"))
+        tab = (max((key_font.measure(k) for k, _ in fields), default=80)) + 40
+        txt.configure(tabs=(tab,))
+        txt.tag_configure("row", lmargin1=0, lmargin2=tab, spacing1=6, spacing3=6)
+        txt.tag_configure("k", font=self.font(DETAIL_FONT, "bold"), foreground=MUTED)
+        for k, v in fields:
+            txt.insert("end", k, ("row", "k"))
+            txt.insert("end", "\t", ("row",))
+            txt.insert("end", v + "\n", ("row",))
+        txt.delete("end-2c", "end-1c") if fields else None  # 마지막 빈 줄 제거
+
+        copy_btn = small_button(head, "내용 전체 복사", lambda: self.copy_to_clipboard(
+            "\n".join(f"{k}: {v}" for k, v in fields), copy_btn))
+        copy_btn.pack(side="right")
 
     def show_files_page(self):
         self.navigate_state("files")
