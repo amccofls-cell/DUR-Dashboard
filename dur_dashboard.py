@@ -1802,7 +1802,8 @@ class App(tk.Tk):
         head.pack(fill="x", pady=(12, 8))
         dot = tk.Frame(head, bg=accent, width=4, height=20)
         dot.pack(side="left", padx=(0, 10))
-        tk.Label(head, text=f"{title} 상세정보", bg=SURFACE, fg=TEXT_DARK,
+        count_note = f"  ·  {len(hits)}건" if key != "combo" and len(hits) > 1 else ""
+        tk.Label(head, text=f"{title} 상세정보{count_note}", bg=SURFACE, fg=TEXT_DARK,
                  font=self.font(13, "bold")).pack(side="left")
 
         def small_button(parent, text, command):
@@ -1945,29 +1946,45 @@ class App(tk.Tk):
                 show_sel()
             return
 
-        data = hits[0]["data"]
         hidden = ("성분코드", "제품코드", "약품코드", "일반명코드", "주성분코드", "업체명", "원본", "시트")
-        fields = []
-        for k, v in data.items():
-            kk = re.sub(r"\s+", "", str(k))  # 머리글 안의 줄바꿈/공백 제거 (예: "일반명\n코드")
-            if sval(v) and not any(h in kk for h in hidden):
-                fields.append((kk, sval(v)))
+        blocks = []  # 해당 건마다 (항목, 값) 목록 하나씩
+        for h in hits:
+            fl = []
+            for k, v in h["data"].items():
+                kk = re.sub(r"\s+", "", str(k))  # 머리글 안의 줄바꿈/공백 제거 (예: "일반명\n코드")
+                if sval(v) and not any(x in kk for x in hidden):
+                    fl.append((kk, sval(v)))
+            blocks.append(fl)
+        multi = len(blocks) > 1
 
         holder, txt = self.make_readonly_text(self.detail_host, height=8, bg=GRAY_SOFT)
         holder.pack(fill="both", expand=True)
         key_font = tkfont.Font(font=self.font(DETAIL_FONT, "bold"))
-        tab = (max((key_font.measure(k) for k, _ in fields), default=80)) + 40
+        all_keys = [k for fl in blocks for k, _ in fl]
+        tab = (max((key_font.measure(k) for k in all_keys), default=80)) + 40
         txt.configure(tabs=(tab,))
         txt.tag_configure("row", lmargin1=0, lmargin2=tab, spacing1=6, spacing3=6)
         txt.tag_configure("k", font=self.font(DETAIL_FONT, "bold"), foreground=MUTED)
-        for k, v in fields:
-            txt.insert("end", k, ("row", "k"))
-            txt.insert("end", "\t", ("row",))
-            txt.insert("end", v + "\n", ("row",))
-        txt.delete("end-2c", "end-1c") if fields else None  # 마지막 빈 줄 제거
+        txt.tag_configure("hdr", font=self.font(DETAIL_FONT, "bold"), foreground=accent,
+                          background=soft, spacing1=14, spacing3=4)
+        for n, fl in enumerate(blocks, 1):
+            if multi:  # 여러 건이면 건마다 구분 머리글을 붙여 모두 표시
+                txt.insert("end", f"  {n} / {len(blocks)}\n", ("hdr",))
+            for k, v in fl:
+                txt.insert("end", k, ("row", "k"))
+                txt.insert("end", "\t", ("row",))
+                txt.insert("end", v + "\n", ("row",))
+        if all_keys or multi:
+            txt.delete("end-2c", "end-1c")  # 마지막 빈 줄 제거
 
-        copy_btn = small_button(head, "내용 전체 복사", lambda: self.copy_to_clipboard(
-            "\n".join(f"{k}: {v}" for k, v in fields), copy_btn))
+        def all_text():
+            parts = []
+            for n, fl in enumerate(blocks, 1):
+                head_line = f"[{n}/{len(blocks)}]\n" if multi else ""
+                parts.append(head_line + "\n".join(f"{k}: {v}" for k, v in fl))
+            return "\n\n".join(parts)
+
+        copy_btn = small_button(head, "내용 전체 복사", lambda: self.copy_to_clipboard(all_text(), copy_btn))
         copy_btn.pack(side="right")
 
     # ------------------------------------------------------------------ files
