@@ -11,13 +11,13 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 from tkinter import font as tkfont
 
 from openpyxl import load_workbook
 
 APP_NAME = "DUR 품목리스트 조회 프로그램"
-VERSION = "1.6"
+VERSION = "1.7"
 
 CATEGORIES = [
     ("combo_paid", "병용금기 급여"),
@@ -82,6 +82,7 @@ def app_dir() -> Path:
 ROOT_DIR = app_dir()
 CFG_PATH = ROOT_DIR / "config.json"
 DB_PATH = ROOT_DIR / "dur_index.sqlite3"
+SETS_PATH = ROOT_DIR / "product_sets.json"  # 저장된 품목 묶음
 
 
 def sval(v):
@@ -426,6 +427,23 @@ class Indexer:
             return [r[0] for r in rows]
         return self.with_retry(_work)
 
+    def has_product(self, product):
+        """현재 인덱스(어느 DUR 목록이든)에 이 품목이 있는지 확인한다."""
+        np = norm(product)
+        cp = product_core(product)
+
+        def _work():
+            with self.conn() as c:
+                if c.execute("SELECT 1 FROM names WHERE product_norm=? LIMIT 1", (np,)).fetchone():
+                    return True
+                if cp and len(cp) >= 4:
+                    for cat, _ in CATEGORIES:
+                        if c.execute("SELECT 1 FROM records WHERE category=? AND core_norm=? LIMIT 1",
+                                     (cat, cp)).fetchone():
+                            return True
+            return False
+        return self.with_retry(_work)
+
     def search_product(self, product):
         np = norm(product)
         cp = product_core(product)
@@ -565,6 +583,7 @@ class App(tk.Tk):
             raise
 
         self.cfg = self.load_cfg()
+        self.product_sets = self.load_sets()
         self.ui_font = self.resolve_font_family()
         self.selected_products = []
         self.results = {}
@@ -579,6 +598,7 @@ class App(tk.Tk):
         self.page_host.pack(fill="both", expand=True)
 
         self.show_lookup_page()
+        self.navigate_state("lookup")
         self.after(500, self.auto_reindex_v151)
 
     # ------------------------------------------------------------------ cfg
@@ -738,10 +758,11 @@ class App(tk.Tk):
     def navigate_state(self, active):
         for key, (row, dot, s, lbl) in self.nav.items():
             is_active = key == active
-            row.config(bg=RAIL_ACTIVE if is_active else RAIL_BG)
+            row_bg = RAIL_ACTIVE if is_active else RAIL_BG
+            row.config(bg=row_bg)
             dot.config(bg=BLUE if is_active else RAIL_BG)
-            s.config(fg="#FFFFFF" if is_active else RAIL_FG)
-            lbl.config(fg="#FFFFFF" if is_active else RAIL_FG,
+            s.config(bg=row_bg, fg="#FFFFFF" if is_active else RAIL_FG)
+            lbl.config(bg=row_bg, fg="#FFFFFF" if is_active else RAIL_FG,
                        font=self.font(11, "bold" if is_active else "normal"))
 
     def make_button(self, parent, text, command, primary=False, danger=False):
@@ -791,6 +812,7 @@ class App(tk.Tk):
 
         search_box = tk.Frame(search_col, bg=SURFACE)
         search_box.pack(fill="x", padx=16)
+        self.search_box = search_box
         icon = tk.Label(search_box, text="⌕", bg="#F4F7FB", fg=MUTED,
                         font=("Segoe UI Symbol", 13), padx=10)
         icon.pack(side="left", fill="y")
@@ -805,10 +827,10 @@ class App(tk.Tk):
         self.query.bind("<FocusIn>", self.clear_placeholder)
         self.query.bind("<KeyRelease>", self.on_query_change)
         self.query.bind("<Down>", lambda e: self.focus_suggestions())
-        self.query.bind("<Return>", lambda e: self.choose_first_suggestion())
+        self.query.bind("<Return>", lambda e: "break")  # 검색어 직접 입력 금지: 후보 목록에서만 선택
 
+        # 후보 목록 틀은 평소에는 배치하지 않는다(빈 공간이 남지 않도록 보일 때만 pack).
         self.suggest_frame = tk.Frame(search_col, bg=SURFACE)
-        self.suggest_frame.pack(fill="x", padx=16, pady=(4, 0))
         self.suggest_list = tk.Listbox(
             self.suggest_frame, height=0, bg=SURFACE, fg=TEXT_DARK,
             font=self.font(10), relief="flat", bd=0,
@@ -819,7 +841,6 @@ class App(tk.Tk):
         self.suggest_list.pack(fill="x")
         self.suggest_list.bind("<Double-Button-1>", lambda e: self.select_suggestion())
         self.suggest_list.bind("<Return>", lambda e: self.select_suggestion())
-        self.suggest_list.pack_forget()
 
         sel_head = tk.Frame(search_col, bg=SURFACE)
         sel_head.pack(fill="x", padx=18, pady=(16, 8))
@@ -832,21 +853,45 @@ class App(tk.Tk):
         del_btn.config(padx=10, pady=4)
         del_btn.pack(side="right")
 
-        self.selected_list_host = tk.Frame(search_col, bg=SURFACE)
-        self.selected_list_host.pack(fill="both", expand=True, padx=16)
-
+        # 조회 버튼은 먼저 아래쪽에 고정해 두고(목록이 아무리 길어져도 가려지지 않음),
+        # 남는 공간에 스크롤 가능한 선택 목록을 배치한다.
         actions = tk.Frame(search_col, bg=SURFACE)
-        actions.pack(fill="x", padx=16, pady=14)
+        actions.pack(side="bottom", fill="x", padx=16, pady=14)
+        set_row = tk.Frame(actions, bg=SURFACE)
+        set_row.pack(fill="x", pady=(0, 8))
+        self.save_set_btn = self.make_button(set_row, "묶음으로 저장", self.save_current_set)
+        self.save_set_btn.config(pady=7)
+        self.save_set_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        open_set_btn = self.make_button(set_row, "저장된 묶음", self.open_sets_dialog)
+        open_set_btn.config(pady=7)
+        open_set_btn.pack(side="left", fill="x", expand=True, padx=(4, 0))
         self.make_button(
             actions, "⌕  선택 품목으로 조회", self.run_selected, primary=True
         ).pack(fill="x", ipady=2)
+
+        self.selected_list_host = tk.Frame(search_col, bg=SURFACE)
+        self.selected_list_host.pack(fill="both", expand=True, padx=16)
+        self.sel_canvas = tk.Canvas(self.selected_list_host, bg=SURFACE,
+                                    highlightthickness=0, bd=0)
+        self.sel_scroll = ttk.Scrollbar(self.selected_list_host, orient="vertical",
+                                        command=self.sel_canvas.yview)
+        self.sel_canvas.configure(yscrollcommand=self._sel_yset)
+        self.sel_canvas.pack(side="left", fill="both", expand=True)
+        self.sel_inner = tk.Frame(self.sel_canvas, bg=SURFACE)
+        self.sel_window = self.sel_canvas.create_window((0, 0), window=self.sel_inner, anchor="nw")
+        self.sel_inner.bind("<Configure>", lambda e: self._sel_fit())
+        self.sel_canvas.bind("<Configure>", lambda e: self._sel_fit())
+        self._bind_sel_wheel(self.sel_canvas)
 
         result = tk.Frame(wrap, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
         result.pack(side="left", fill="both", expand=True)
         self.result_body = result
 
         self.refresh_selected_panel()
-        self.render_empty()
+        if self.current_product and self.current_product in self.results:
+            self.render_results()
+        else:
+            self.render_empty()
 
     def clear_placeholder(self, _=None):
         if self.query.get() == PLACEHOLDER:
@@ -872,13 +917,13 @@ class App(tk.Tk):
             self.suggest_list.insert("end", p)
         if items:
             self.suggest_list.config(height=min(8, len(items)))
-            self.suggest_list.pack(fill="x")
+            self.suggest_frame.pack(fill="x", padx=16, pady=(4, 0), after=self.search_box)
         else:
             self.hide_suggestions()
 
     def hide_suggestions(self):
-        if hasattr(self, "suggest_list"):
-            self.suggest_list.pack_forget()
+        if hasattr(self, "suggest_frame"):
+            self.suggest_frame.pack_forget()
 
     def focus_suggestions(self):
         if self.suggest_list.winfo_ismapped() and self.suggest_list.size():
@@ -887,22 +932,6 @@ class App(tk.Tk):
             self.suggest_list.selection_set(0)
             return "break"
 
-    def choose_first_suggestion(self):
-        if self.suggest_list.winfo_ismapped() and self.suggest_list.size():
-            self.suggest_list.selection_clear(0, "end")
-            self.suggest_list.selection_set(0)
-            self.select_suggestion()
-            return "break"
-        q = self.query.get().strip()
-        if q and q != PLACEHOLDER:
-            if q not in self.selected_products:
-                self.selected_products.append(q)
-            self.refresh_selected_panel()
-            self.query.delete(0, "end")
-            self.hide_suggestions()
-            return "break"
-        return None
-
     def select_suggestion(self):
         sel = self.suggest_list.curselection()
         if not sel:
@@ -910,56 +939,113 @@ class App(tk.Tk):
         product = self.suggest_list.get(sel[0])
         if product not in self.selected_products:
             self.selected_products.append(product)
-        self.refresh_selected_panel()
+        self.refresh_selected_panel(to_end=True)
         self.query.delete(0, "end")
         self.query.focus_set()
         self.hide_suggestions()
 
-    def refresh_selected_panel(self):
-        if not hasattr(self, "selected_list_host"):
+    # -------------------------------------------- 선택 품목 목록(스크롤 영역)
+    def _sel_yset(self, first, last):
+        """내용이 영역보다 길 때만 스크롤바를 보여 준다."""
+        self.sel_scroll.set(first, last)
+        needed = not (float(first) <= 0.0 and float(last) >= 1.0)
+        shown = self.sel_scroll.winfo_manager() != ""
+        if needed and not shown:
+            self.sel_scroll.pack(side="right", fill="y", before=self.sel_canvas)
+        elif not needed and shown:
+            self.sel_scroll.pack_forget()
+
+    def _sel_fit(self):
+        """내부 프레임 너비를 영역에 맞추고, 짧을 때는 영역 높이만큼 채운다."""
+        if not hasattr(self, "sel_canvas"):
             return
-        for w in self.selected_list_host.winfo_children():
+        cw = self.sel_canvas.winfo_width()
+        ch = self.sel_canvas.winfo_height()
+        need = self.sel_inner.winfo_reqheight()
+        self.sel_canvas.itemconfigure(self.sel_window, width=cw, height=max(ch, need))
+        self.sel_canvas.configure(scrollregion=(0, 0, cw, max(ch, need)))
+
+    def _bind_sel_wheel(self, widget):
+        def on_wheel(e):
+            if self.sel_inner.winfo_reqheight() <= self.sel_canvas.winfo_height():
+                return "break"
+            step = -1 if (getattr(e, "num", 0) == 4 or getattr(e, "delta", 0) > 0) else 1
+            self.sel_canvas.yview_scroll(step * 2, "units")
+            return "break"
+        widget.bind("<MouseWheel>", on_wheel, add="+")
+        widget.bind("<Button-4>", on_wheel, add="+")
+        widget.bind("<Button-5>", on_wheel, add="+")
+        for ch in widget.winfo_children():
+            self._bind_sel_wheel(ch)
+
+    def refresh_selected_panel(self, to_end=False):
+        if not hasattr(self, "sel_inner"):
+            return
+        first = self.sel_canvas.yview()[0]
+        for w in self.sel_inner.winfo_children():
             w.destroy()
         self.selected_count.config(text=str(len(self.selected_products)))
         if not self.selected_products:
-            empty = tk.Frame(self.selected_list_host, bg=GRAY_SOFT,
+            empty = tk.Frame(self.sel_inner, bg=GRAY_SOFT,
                              highlightbackground=BORDER, highlightthickness=1)
             empty.pack(fill="both", expand=True, pady=(0, 2))
             tk.Label(empty, text="＋", bg=GRAY_SOFT, fg="#A8B7CB",
                      font=("Segoe UI Symbol", 20)).pack(pady=(26, 4))
             tk.Label(empty, text="검색 후보에서 품목을 선택하면\n이곳에 누적됩니다.",
                      bg=GRAY_SOFT, fg=MUTED, justify="center", font=self.font(9)).pack(pady=(0, 22))
+            self._bind_sel_wheel(self.sel_inner)
+            self.sel_canvas.update_idletasks()
+            self._sel_fit()
+            self.sel_canvas.yview_moveto(0)
             return
 
-        host = tk.Frame(self.selected_list_host, bg=SURFACE)
-        host.pack(fill="both", expand=True)
+        active_row = None
         for i, product in enumerate(self.selected_products, 1):
             active = product == self.current_product
             bg = BLUE_SOFT if active else "#F8FAFC"
             border = "#B9D4F5" if active else BORDER
-            row = tk.Frame(host, bg=bg, highlightbackground=border,
+            row = tk.Frame(self.sel_inner, bg=bg, highlightbackground=border,
                            highlightthickness=1, height=52, cursor="hand2")
             row.pack(fill="x", pady=3)
             row.pack_propagate(False)
+            if active:
+                active_row = row
+                bar = tk.Frame(row, bg=BLUE, width=3)
+                bar.pack(side="left", fill="y")
             num = tk.Label(row, text=str(i), bg=bg, fg=MUTED,
                            font=self.font_en(9, "bold"), width=3)
             num.pack(side="left", padx=(8, 0))
-            name = tk.Label(row, text=product, bg=bg, fg=BLUE if active else TEXT_DARK,
-                            font=self.font(10, "bold" if active else "normal"),
-                            anchor="w")
-            name.pack(side="left", fill="x", expand=True, padx=(2, 6))
             close = tk.Label(row, text="✕", bg=bg, fg="#9AA8BC",
                              font=self.font(10, "bold"), cursor="hand2", padx=8)
             close.pack(side="right")
+            name = tk.Label(row, text=product, bg=bg, fg=BLUE if active else TEXT_DARK,
+                            font=self.font(10, "bold" if active else "normal"),
+                            anchor="w", justify="left", wraplength=220)
+            name.pack(side="left", fill="x", expand=True, padx=(2, 6))
             widgets = (row, num, name)
             for w in widgets:
                 w.bind("<Button-1>", lambda e, p=product: self.pick_product(p))
             close.bind("<Button-1>", lambda e, p=product: self.remove_selected_product(p))
             close.bind("<Enter>", lambda e, c=close: c.config(fg=ERROR))
             close.bind("<Leave>", lambda e, c=close: c.config(fg="#9AA8BC"))
-            if active:
-                bar = tk.Frame(row, bg=BLUE, width=3)
-                bar.pack(side="left", fill="y")
+
+        self._bind_sel_wheel(self.sel_inner)
+        self.sel_canvas.update_idletasks()
+        self._sel_fit()
+        self.sel_canvas.update_idletasks()
+        if to_end:
+            self.sel_canvas.yview_moveto(1.0)
+        else:
+            self.sel_canvas.yview_moveto(first)
+            if active_row is not None:  # 활성 행이 화면 밖이면 보이는 위치로 이동
+                total = max(1, self.sel_inner.winfo_reqheight())
+                view_h = self.sel_canvas.winfo_height()
+                top = self.sel_canvas.canvasy(0)
+                y, h = active_row.winfo_y(), active_row.winfo_height() + 6
+                if y < top:
+                    self.sel_canvas.yview_moveto(y / total)
+                elif y + h > top + view_h:
+                    self.sel_canvas.yview_moveto((y + h - view_h) / total)
 
     def refresh_selected_label(self):
         self.refresh_selected_panel()
@@ -975,6 +1061,240 @@ class App(tk.Tk):
             self.render_empty()
         elif self.results and self.current_product in self.results:
             self.render_results()
+
+    # ------------------------------------------------------------ 품목 묶음
+    def load_sets(self):
+        try:
+            data = json.loads(SETS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        out = []
+        for d in data if isinstance(data, list) else []:
+            if not (isinstance(d, dict) and isinstance(d.get("name"), str)
+                    and isinstance(d.get("products"), list)):
+                continue
+            prods = [str(p) for p in d["products"] if str(p).strip()]
+            if d["name"].strip() and prods:
+                out.append({"name": d["name"].strip(), "products": prods,
+                            "saved_at": str(d.get("saved_at", ""))})
+        return out
+
+    def write_sets(self):
+        tmp = SETS_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(self.product_sets, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, SETS_PATH)
+
+    def save_current_set(self, name=None):
+        """지금 '선택한 품목' 전체를 이름을 붙여 묶음으로 저장한다."""
+        if not self.selected_products:
+            messagebox.showwarning("저장할 품목 없음", "먼저 품목을 선택한 뒤 저장해 주세요.")
+            return
+        if name is None:
+            name = simpledialog.askstring(
+                "묶음으로 저장",
+                f"선택한 {len(self.selected_products)}개 품목을 저장할 이름을 입력하세요.",
+                initialvalue=f"묶음 {len(self.product_sets) + 1}", parent=self)
+        if name is None:
+            return
+        name = name.strip()[:40]
+        if not name:
+            messagebox.showwarning("이름 필요", "묶음 이름을 입력해 주세요.")
+            return
+        existing = next((s for s in self.product_sets if s["name"] == name), None)
+        if existing and not messagebox.askyesno(
+                "같은 이름의 묶음",
+                f"'{name}' 묶음이 이미 있습니다.\n현재 선택한 품목으로 덮어쓸까요?"):
+            return
+        entry = {"name": name, "products": list(self.selected_products),
+                 "saved_at": datetime.now().isoformat(timespec="seconds")}
+        if existing:
+            existing.update(entry)
+        else:
+            self.product_sets.append(entry)
+        try:
+            self.write_sets()
+        except Exception as e:
+            messagebox.showerror("묶음 저장 실패", str(e))
+            return
+        btn = getattr(self, "save_set_btn", None)
+        if btn is not None and btn.winfo_exists():
+            old = "묶음으로 저장"
+            btn.config(text="저장됨 ✓")
+            self.after(1400, lambda: btn.winfo_exists() and btn.config(text=old))
+
+    def missing_products(self, products):
+        try:
+            return [p for p in products if not self.idx.has_product(p)]
+        except Exception:
+            return []
+
+    def apply_set(self, products, replace=True, run=True):
+        """묶음의 품목을 선택 목록에 넣고(replace=True면 교체), 필요하면 바로 조회한다."""
+        products = list(dict.fromkeys(products))
+        if replace:
+            saved = [set(s["products"]) for s in self.product_sets]
+            cur = set(self.selected_products)
+            unsaved = bool(cur) and not cur <= set(self.results) and cur not in saved
+            if unsaved and not messagebox.askyesno(
+                    "선택 목록 교체",
+                    f"현재 선택한 {len(self.selected_products)}개 품목은 저장·조회되지 않았습니다.\n"
+                    "이 묶음으로 교체할까요?"):
+                return False
+            self.selected_products = products
+            self.results = {}
+            self.current_product = None
+            self.refresh_selected_panel()
+        else:
+            for p in products:
+                if p not in self.selected_products:
+                    self.selected_products.append(p)
+            self.refresh_selected_panel(to_end=True)
+        if run:
+            missing = self.missing_products(products)
+            self.run_selected()
+            if missing:
+                messagebox.showwarning(
+                    "일부 품목 확인 필요",
+                    f"다음 {len(missing)}개 품목은 현재 등록된 기준파일에서 찾을 수 없습니다.\n"
+                    "제품명이 바뀌었거나 기준파일이 등록되지 않았을 수 있습니다.\n"
+                    "해당 품목은 다시 검색해서 선택해 주세요.\n\n"
+                    + "\n".join(f"- {m}" for m in missing[:15])
+                    + (f"\n… 외 {len(missing) - 15}개" if len(missing) > 15 else ""))
+        return True
+
+    def open_sets_dialog(self):
+        win = tk.Toplevel(self)
+        win.title("저장된 묶음")
+        win.configure(bg=SURFACE)
+        win.transient(self)
+        w, h = 600, 560
+        win.geometry(f"{w}x{h}")
+        win.minsize(520, 380)
+        win.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - w) // 2
+        y = self.winfo_y() + (self.winfo_height() - h) // 2
+        win.geometry(f"+{max(0, x)}+{max(0, y)}")
+
+        head = tk.Frame(win, bg=SURFACE)
+        head.pack(fill="x", padx=22, pady=(18, 6))
+        tk.Label(head, text="저장된 묶음", bg=SURFACE, fg=TEXT,
+                 font=self.font(15, "bold")).pack(side="left")
+        tk.Label(win, text="묶음을 클릭하면 품목 검색 없이 바로 DUR 해당 여부를 조회합니다.",
+                 bg=SURFACE, fg=MUTED, font=self.font(10)).pack(anchor="w", padx=22, pady=(0, 10))
+
+        foot = tk.Frame(win, bg=SURFACE)
+        foot.pack(side="bottom", fill="x", padx=22, pady=14)
+        self.make_button(foot, "닫기", win.destroy).pack(side="right")
+
+        body = tk.Frame(win, bg=SURFACE)
+        body.pack(fill="both", expand=True, padx=22)
+        canvas = tk.Canvas(body, bg=SURFACE, highlightthickness=0, bd=0)
+        sb = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
+
+        def yset(first, last):  # 목록이 길 때만 스크롤바 표시
+            sb.set(first, last)
+            needed = not (float(first) <= 0.0 and float(last) >= 1.0)
+            shown = sb.winfo_manager() != ""
+            if needed and not shown:
+                sb.pack(side="right", fill="y", before=canvas)
+            elif not needed and shown:
+                sb.pack_forget()
+
+        canvas.configure(yscrollcommand=yset)
+        canvas.pack(side="left", fill="both", expand=True)
+        inner = tk.Frame(canvas, bg=SURFACE)
+        window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window_id, width=e.width))
+
+        def on_wheel(e):
+            if inner.winfo_reqheight() <= canvas.winfo_height():
+                return
+            step = -1 if (getattr(e, "num", 0) == 4 or getattr(e, "delta", 0) > 0) else 1
+            canvas.yview_scroll(step * 2, "units")
+        win.bind("<MouseWheel>", on_wheel)
+        win.bind("<Button-4>", on_wheel)
+        win.bind("<Button-5>", on_wheel)
+
+        def short(p):
+            t = re.sub(r"[_(].*$", "", p).strip()
+            return t or p
+
+        def do_run(entry):
+            win.destroy()
+            self.apply_set(entry["products"], replace=True, run=True)
+
+        def do_add(entry):
+            win.destroy()
+            self.apply_set(entry["products"], replace=False, run=False)
+
+        def do_delete(entry):
+            if not messagebox.askyesno("묶음 삭제", f"'{entry['name']}' 묶음을 삭제할까요?", parent=win):
+                return
+            if entry in self.product_sets:
+                self.product_sets.remove(entry)
+            try:
+                self.write_sets()
+            except Exception as e:
+                messagebox.showerror("묶음 삭제 실패", str(e), parent=win)
+            render()
+
+        def bind_click(widget, entry):
+            if isinstance(widget, tk.Button):
+                return
+            widget.bind("<Button-1>", lambda e, en=entry: do_run(en))
+            for ch in widget.winfo_children():
+                bind_click(ch, entry)
+
+        def render():
+            for c in inner.winfo_children():
+                c.destroy()
+            # 최근 저장한 묶음이 위로 (저장 시각이 같으면 나중에 만든 것이 위)
+            entries = [e for _, e in sorted(enumerate(self.product_sets),
+                                            key=lambda t: (t[1].get("saved_at", ""), t[0]),
+                                            reverse=True)]
+            if not entries:
+                tk.Label(inner, text="저장된 묶음이 없습니다.\n품목을 선택한 뒤 '묶음으로 저장'을 눌러 보세요.",
+                         bg=SURFACE, fg=MUTED, font=self.font(11), justify="center").pack(pady=60)
+                return
+            for entry in entries:
+                bg = GRAY_SOFT
+                card = tk.Frame(inner, bg=bg, highlightbackground=BORDER, highlightthickness=1,
+                                cursor="hand2")
+                card.pack(fill="x", pady=5, padx=(0, 6))
+                top = tk.Frame(card, bg=bg)
+                top.pack(fill="x", padx=14, pady=(12, 2))
+                tk.Label(top, text=entry["name"], bg=bg, fg=TEXT, font=self.font(12, "bold"),
+                         anchor="w").pack(side="left")
+                tk.Label(top, text=f"{len(entry['products'])}개 품목", bg=BLUE_SOFT, fg=BLUE,
+                         font=self.font(9, "bold"), padx=8, pady=2).pack(side="left", padx=(8, 0))
+                saved = entry.get("saved_at", "").replace("T", " ")[:16]
+                if saved:
+                    tk.Label(top, text=f"저장 {saved}", bg=bg, fg=MUTED,
+                             font=self.font(9)).pack(side="right")
+                names = [short(p) for p in entry["products"]]
+                preview = " · ".join(names[:4]) + (f"  외 {len(names) - 4}개" if len(names) > 4 else "")
+                tk.Label(card, text=preview, bg=bg, fg=TEXT_DARK, font=self.font(10),
+                         anchor="w", justify="left", wraplength=470).pack(fill="x", padx=14, pady=(0, 8))
+                btns = tk.Frame(card, bg=bg)
+                btns.pack(fill="x", padx=14, pady=(0, 12))
+                run_b = self.make_button(btns, "⌕  바로 조회", lambda en=entry: do_run(en), primary=True)
+                run_b.config(padx=14, pady=5)
+                run_b.pack(side="left")
+                add_b = self.make_button(btns, "목록에 추가", lambda en=entry: do_add(en))
+                add_b.config(padx=12, pady=5)
+                add_b.pack(side="left", padx=(8, 0))
+                del_b = self.make_button(btns, "삭제", lambda en=entry: do_delete(en), danger=True)
+                del_b.config(padx=12, pady=5)
+                del_b.pack(side="right")
+                bind_click(card, entry)
+
+        render()
+        try:
+            win.grab_set()
+        except tk.TclError:
+            pass
+        win.focus_set()
 
     def clear_selected(self):
         self.selected_products.clear()
@@ -1163,12 +1483,12 @@ class App(tk.Tk):
             hover_bg = "#F1F5FA" if not active else bg
             card_widgets = [c] + descendants(c)
 
-            def apply_bg(color):
-                for w in card_widgets:
+            def apply_bg(color, widgets=card_widgets, base=bg, hover=hover_bg):
+                for w in widgets:
                     try:
                         if not w.winfo_exists():
                             continue
-                        if w.cget("bg") in (bg, hover_bg):
+                        if w.cget("bg") in (base, hover):
                             w.config(bg=color)
                     except tk.TclError:
                         pass
@@ -1177,8 +1497,8 @@ class App(tk.Tk):
                 try:
                     w.bind("<Button-1>", lambda e, k=key: self.render_detail(k))
                     if not active:
-                        w.bind("<Enter>", lambda e: w.winfo_exists() and apply_bg(hover_bg), add="+")
-                        w.bind("<Leave>", lambda e: w.winfo_exists() and apply_bg(bg), add="+")
+                        w.bind("<Enter>", lambda e, f=apply_bg, c=hover_bg: f(c), add="+")
+                        w.bind("<Leave>", lambda e, f=apply_bg, c=bg: f(c), add="+")
                 except tk.TclError:
                     pass
 
@@ -1683,34 +2003,38 @@ class App(tk.Tk):
         panel.pack(fill="both", expand=True)
 
         headers = ("파일 종류", "상태", "마지막 등록", "등록 파일", "")
-        col_w = (190, 190, 160, 1, 92)
         for col, label in enumerate(headers):
             tk.Label(
                 panel, text=label, bg="#F1F5FA", fg="#52626D",
-                font=self.font(10, "bold"), anchor="w"
-            ).grid(row=0, column=col, sticky="nsew", padx=14, pady=12)
+                font=self.font(10, "bold"), anchor="w", padx=14, pady=12
+            ).grid(row=0, column=col, sticky="nsew")
         panel.columnconfigure(3, weight=1)
 
         self.file_rows = {}
         for i, (key, label) in enumerate(CATEGORIES, 1):
             bg = SURFACE if i % 2 else "#FBFCFE"
-            a = tk.Label(panel, text=label, bg=bg, fg=TEXT_DARK, font=self.font(11, "bold"), anchor="w")
-            b = tk.Label(panel, text="미등록", bg=bg, fg=MUTED, font=self.font(10), anchor="w")
-            c = tk.Label(panel, text="—", bg=bg, fg=MUTED, font=self.font(10), anchor="w")
-            d = tk.Label(panel, text="—", bg=bg, fg=MUTED, font=self.font(10), anchor="w")
-            e = self.make_button(panel, "삭제", lambda k=key: self.delete_category_file(k), danger=True)
+            a = tk.Label(panel, text=label, bg=bg, fg=TEXT_DARK, font=self.font(11, "bold"),
+                         anchor="w", padx=14, pady=13)
+            b = tk.Label(panel, text="미등록", bg=bg, fg=MUTED, font=self.font(10),
+                         anchor="w", padx=14, pady=13)
+            c = tk.Label(panel, text="—", bg=bg, fg=MUTED, font=self.font(10),
+                         anchor="w", padx=14, pady=13)
+            d = tk.Label(panel, text="—", bg=bg, fg=MUTED, font=self.font(10),
+                         anchor="w", padx=14, pady=13)
+            cell = tk.Frame(panel, bg=bg)
+            e = self.make_button(cell, "삭제", lambda k=key: self.delete_category_file(k), danger=True)
             e.config(padx=12, pady=5)
+            e.pack(padx=12, pady=8)
 
             for j, w in enumerate((a, b, c, d)):
-                w.grid(row=i, column=j, sticky="nsew", padx=14, pady=13)
-            e.grid(row=i, column=4, sticky="e", padx=12, pady=8)
+                w.grid(row=i, column=j, sticky="nsew")
+            cell.grid(row=i, column=4, sticky="nsew")
             self.file_rows[key] = (b, c, d, e)
 
         self.refresh_status()
 
     def classify_file(self, path):
         name = Path(path).name
-        n = norm(name)
         if "병용금기" in name and "비급여" in name:
             return "combo_unpaid"
         if "병용금기" in name and ("급여" in name and "비급여" not in name):
@@ -1749,7 +2073,6 @@ class App(tk.Tk):
             return
 
         files_dir = ROOT_DIR / "files"
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         items = []
         self.cfg.setdefault("_uploaded_at", {})
         for cat, p in mapped.items():
