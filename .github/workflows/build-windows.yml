@@ -31,7 +31,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Build DUR Dashboard
+      - name: Build executable
         shell: pwsh
         run: |
           pyinstaller --noconfirm --clean --onefile --windowed --name DUR_Dashboard dur_dashboard.py
@@ -42,16 +42,20 @@ jobs:
           New-Item -ItemType Directory -Force -Path release | Out-Null
           Copy-Item dist\DUR_Dashboard.exe release\DUR_Dashboard.exe
           Set-Content -Path release\README.txt -Encoding UTF8 -Value @'
-          DUR Dashboard v1.3
-          ==================
+          DUR 품목리스트 조회 프로그램 v1.7
+          ==================================
           1. DUR_Dashboard.exe를 실행합니다.
-          2. 상단 '기준파일 관리'에서 8개 DUR Excel을 한 번에 선택합니다.
-          3. 프로그램이 파일을 자동 분류한 뒤 모든 시트를 인덱싱합니다.
-          4. 'DUR 조회'에서 여러 품목을 쉼표/세미콜론 또는 여러 줄로 입력합니다.
-          5. 약품별 결과와 DUR 종류별 결과를 확인합니다.
+          2. '기준파일 관리'에서 DUR Excel 파일을 한 번에 선택합니다.
+          3. 프로그램이 파일을 자동 분류하고 모든 시트를 인덱싱합니다.
+          4. 'DUR 조회'에서 품목명의 일부를 입력하면 검색창 아래 후보가 자동 표시됩니다.
+          5. 후보 목록에서 품목을 선택하여 여러 품목을 누적한 뒤 '선택 품목으로 조회'를 실행합니다.
+             (검색어만 입력하고 Enter를 눌러도 품목이 추가되지 않으며, 반드시 후보에서 선택해야 합니다.)
+          6. 결과 화면에서 '약품별 보기'와 'DUR별 보기'를 전환할 수 있습니다.
+          7. 자주 조회하는 품목은 '묶음으로 저장'으로 저장해 두고, '저장된 묶음'에서 클릭하면 검색 없이 바로 조회됩니다.
+          8. 상세정보는 드래그해서 선택하거나 복사 버튼으로 복사할 수 있고, 병용금기 표는 열 제목을 눌러 정렬할 수 있습니다.
 
-          병용금기 급여/비급여 파일은 A,D,F,G,J,M,N,O 열만 인덱싱합니다.
-          등록 Excel과 검색 인덱스는 사용자 PC의 로컬 영역에만 저장됩니다.
+          병용금기 급여/비급여는 A,D,F,G,J,M,N,O 열만 인덱싱합니다.
+          연령금기/비대면진료 연결 안정화 및 기존 인덱스 자동 보정이 포함되어 있습니다.
           '@
           Compress-Archive -Path release\* -DestinationPath DUR_Dashboard_Windows.zip -Force
 
